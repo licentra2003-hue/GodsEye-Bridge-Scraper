@@ -1,0 +1,45 @@
+{
+  "executive_summary": {
+    "title": "Your AEO Competitive Analysis for Test Product",
+    "status_overview": "Your product, 'Test Product', was not featured, as the AI's response to the query 'best practices for python asyncio concurrency' focused exclusively on technical programming concepts and best practices, not product recommendations.",
+    "strategic_analogy": "This is like bringing a beautifully crafted compass to a concert. While an excellent instrument in its own right, it doesn't align with the performance being evaluated. The AI is looking for technical harmony, not navigation."
+  },
+  "client_product_visibility": {
+    "status": "Not Featured",
+    "details": "Your product, 'Test Product', was not mentioned in the AI's overview text or source links. The query was highly technical and informational, pertaining to Python programming best practices, which is outside the scope of a generic 'Test Product'."
+  },
+  "ai_answer_deconstruction": {
+    "dominant_narrative": "The AI is building a narrative around providing comprehensive, structured best practices for implementing efficient and robust concurrency using Python's `asyncio` library. It aims to guide users through core concepts, task management, error handling, resource management, and performance optimization in an I/O-bound context.",
+    "key_decision_factors": [
+      "Accuracy and clarity of technical explanations for `asyncio` concepts",
+      "Identification of specific Python modules, functions, and patterns (e.g., `asyncio.run`, `asyncio.create_task`, `asyncio.Semaphore`, `aiohttp.ClientSession`, `TaskGroups`)",
+      "Guidance on avoiding common pitfalls (e.g., blocking event loop, resource leaks, unawaited tasks)",
+      "Structured advice categorized by functional area (e.g., Task Management, Error Handling)",
+      "Practical tips for performance and debugging (e.g., profiling, offloading CPU-bound tasks)"
+    ],
+    "trusted_source_analysis": "The AI demonstrates high trust in technical programming blogs and educational content platforms, as evidenced by the sole source link to 'pythonprograming.com'. These sources are valued for their ability to provide detailed, accurate, and practical information on coding practices."
+  },
+  "competitive_landscape_analysis": [],
+  "strategic_gap_and_opportunity_analysis": {
+    "analysis_summary": "Given the nature of the query, 'best practices for python asyncio concurrency', and the generic description of 'Test Product', there is a fundamental mismatch between the client's product and the search intent. The AI is not recommending products but providing technical guidance.",
+    "if_featured": null,
+    "if_not_featured": {
+      "exclusion_reasons": "Your product was not mentioned primarily because the query is a technical informational search for programming best practices, not a product-discovery query. 'Test Product' does not align with the AI's intent to provide code-level guidance and conceptual explanations related to Python `asyncio`.",
+      "path_to_inclusion": "For 'Test Product' to be featured in *relevant* AI search results, its associated online content (website, documentation, blog posts) must clearly articulate its purpose, features, benefits, and use cases. If 'Test Product' were a Python library or tool, its content would need to align with the technical keywords and concepts the AI is extracting from authoritative programming resources. This would involve specific naming of features, clear demonstrations of utility, and presence on developer-focused platforms or documentation sites."
+    }
+  },
+  "actionable_recommendations": [
+    {
+      "recommendation": "Identify and Target Relevant AI Queries",
+      "action": "Conduct thorough keyword research to identify AI search queries where 'Test Product' would genuinely be a relevant solution or resource. Focus on queries that imply product discovery, comparison, or problem-solving that your product addresses."
+    },
+    {
+      "recommendation": "Develop AI-Optimized Product Content",
+      "action": "For future, relevant queries, ensure your product's online content (website, landing pages, blog posts) is structured to be easily parsable by AI. Clearly define what the product is, what problem it solves, its key features, and any unique selling propositions using clear headings, bullet points, and concise language. Incorporate specific keywords and phrases that AI models are likely to extract."
+    },
+    {
+      "recommendation": "Cultivate Authoritative Digital Footprint",
+      "action": "For relevant product categories, strive to have 'Test Product' mentioned and reviewed on authoritative third-party platforms (e.g., industry-specific review sites, major e-commerce platforms, reputable tech blogs, developer forums). The AI highly values external validation and mentions from trusted sources."
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      APP_NAME: strategic-analysis-backend
+      APP_ENV: production
+      APP_DEBUG: "false"
+      HOST: 0.0.0.0
+      PORT: 8000
+
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL_NAME: ${GEMINI_MODEL_NAME:-gemini-2.5-flash}
+      GEMINI_TEMPERATURE: ${GEMINI_TEMPERATURE:-0.7}
+      GEMINI_TOP_P: ${GEMINI_TOP_P:-0.95}
+      GEMINI_TOP_K: ${GEMINI_TOP_K:-40}
+      GEMINI_MAX_OUTPUT_TOKENS: ${GEMINI_MAX_OUTPUT_TOKENS:-8192}
+
+      RETRY_MAX_ATTEMPTS: ${RETRY_MAX_ATTEMPTS:-5}
+      RETRY_MIN_WAIT_SECONDS: ${RETRY_MIN_WAIT_SECONDS:-1}
+      RETRY_MAX_WAIT_SECONDS: ${RETRY_MAX_WAIT_SECONDS:-15}
+      RETRY_MULTIPLIER: ${RETRY_MULTIPLIER:-1}
+
+      NEXT_PUBLIC_SUPABASE_URL: ${NEXT_PUBLIC_SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

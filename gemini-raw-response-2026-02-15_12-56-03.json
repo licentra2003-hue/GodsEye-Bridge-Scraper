@@ -1,0 +1,84 @@
+{
+  "executive_summary": {
+    "title": "Your AEO Competitive Analysis for Test Product",
+    "status_overview": "Your product was not featured, as the AI Overview focuses on providing authoritative, data-driven insights and trend analysis related to the impact of AI on software engineering jobs, rather than specific products.",
+    "strategic_analogy": "This is like bringing a hammer to a discussion about astrophysics. While a hammer is a useful tool, it's not relevant to the scientific discourse at hand. The AI is seeking expert analysis and data, not product recommendations."
+  },
+  "client_product_visibility": {
+    "status": "Not Featured",
+    "details": "Your product 'Test Product' was not mentioned in the AI Overview, as the query 'impact of AI on software engineering jobs' is informational and trend-focused, not product-centric. The AI's response highlights industry analysis, expert predictions, and skill shifts."
+  },
+  "ai_answer_deconstruction": {
+    "dominant_narrative": "The AI is constructing a comprehensive narrative around the transformative impact of AI on the software engineering profession. It emphasizes shifts in roles, required skills, market trends, and employment impacts, presenting both challenges (e.g., entry-level hurdles, upskilling imperative) and opportunities (e.g., agentic engineering, demand for meta-skills). The narrative is heavily reliant on data points, expert opinions, and industry reports.",
+    "key_decision_factors": [
+      "Authoritative data points and statistics (e.g., percentage increases/decreases, market share)",
+      "Expert predictions and analyses from research firms (e.g., Gartner)",
+      "Industry trends and shifts (e.g., bifurcation of workforce, upskilling imperative)",
+      "Specific examples from major tech companies (e.g., Google, Anthropic, AWS code generation)",
+      "Identification of evolving roles and critical 'meta-skills'",
+      "Mentions of relevant industry events for networking and learning."
+    ],
+    "trusted_source_analysis": "The AI demonstrates high trust in a diverse set of authoritative sources within the technology and career development domains. These include reputable tech publications (IEEE Spectrum, Computer.org), industry newsletters (Pragmatic Engineer), career advice platforms (Dice, CMU Bootcamps), enterprise tech blogs (IBM), analytics publications (Analytics India Magazine), and professional networking sites (LinkedIn). It also synthesizes information to mention major tech companies like Google, Anthropic, and AWS as data points."
+  },
+  "competitive_landscape_analysis": [
+    {
+      "competitor_name": "AI-assisted Development Speed (55.8% faster)",
+      "reason_for_inclusion": "Cited as a primary benefit of AI integration, demonstrating efficiency gains in software development tasks.",
+      "source_of_mention": "https://www.computer.org/csdl/magazine/co/2025/05/10970187/260SnIeoUUM#:~:text=For%20instance%2C%20a%20controlled%20experiment%20demonstrated%20that,55.8%25%20faster%20than%20those%20without%20AI%20assistance."
+    },
+    {
+      "competitor_name": "Impact on Entry-Level Software Engineers ('broken rung')",
+      "reason_for_inclusion": "Highlighted as a significant challenge and a 'broken rung' in the career ladder for new professionals due to AI adoption.",
+      "source_of_mention": "https://spectrum.ieee.org/ai-effect-entry-level-jobs#:~:text=Using%20AI%20to%20Your%20Advantage&text=The%20NACE%20data%20supports%20this,are%20consistently%20prioritized%20by%20employers."
+    },
+    {
+      "competitor_name": "Gartner's Upskilling Prediction (80% by 2027)",
+      "reason_for_inclusion": "An expert prediction used to underscore the critical need for software engineers to adapt and acquire new skills to remain relevant.",
+      "source_of_mention": "https://analyticsindiamag.com/ai-news-updates/80-of-engineers-could-lose-their-jobs-if-they-dont-upskill-by-2027/#:~:text=Gartner%2C%20the%20research%20and%20advisory%20firm%2C%20said,80%25%20of%20the%20engineering%20workforce%20to%20upskill."
+    },
+    {
+      "competitor_name": "AWS's AI-generated Production Code (75%)",
+      "reason_for_inclusion": "A concrete example from a major tech company illustrating the widespread integration of AI in actual production codebases.",
+      "source_of_mention": "https://www.linkedin.com/posts/joseph-cheta_ai-is-taking-the-drivers-seat-even-in-production-activity-7386327328718737408-OEIV#:~:text=Amazon's%20AWS%20CEO%20revealed%20that,software%20in%20the%20coming%20years."
+    },
+    {
+      "competitor_name": "Evolving Roles: Agentic Engineering & Meta-Skills",
+      "reason_for_inclusion": "Describes the shift in core responsibilities and the new, high-value skills required for future software engineers.",
+      "source_of_mention": "https://bootcamps.cs.cmu.edu/blog/will-ai-replace-software-engineers-reality-check#:~:text=Artificial%20intelligence%20(AI)%20is%20rapidly,creative%20aspects%20of%20software%20design."
+    },
+    {
+      "competitor_name": "Upcoming Industry Events (UserConf, Tech & Innovation Summit)",
+      "reason_for_inclusion": "Provides practical opportunities for users to engage with and learn about the discussed industry shifts and network.",
+      "source_of_mention": "https://medium.com/@hayreddintuzel/how-ai-will-affect-the-software-engineering-market-in-2025-and-the-future-of-software-engineering-1ee253577aea"
+    }
+  ],
+  "strategic_gap_and_opportunity_analysis": {
+    "analysis_summary": "Given the nature of the query, which is highly informational and analytical, the client's 'Test Product' is not directly relevant. The AI's response prioritizes data, expert predictions, and trend analysis from authoritative sources within the tech and career development space.",
+    "if_featured": {
+      "current_positioning": "",
+      "opportunities_for_improvement": ""
+    },
+    "if_not_featured": {
+      "exclusion_reasons": "Your product was excluded because the query 'impact of AI on software engineering jobs' is not a product-seeking query. The AI's objective is to provide a comprehensive overview of industry shifts, skill requirements, and market dynamics, drawing upon research, reports, and expert commentary, none of which align with a generic 'Test Product'.",
+      "path_to_inclusion": "For future product-related queries, ensure your product description and associated content are highly relevant to the specific problem or solution the AI is addressing. For informational queries like this one, the path to 'inclusion' would involve becoming an authoritative source of information, research, or expert opinion on the topic of AI's impact on software engineering. This would require publishing well-researched articles, studies, or expert interviews on high-authority domains."
+    }
+  },
+  "actionable_recommendations": [
+    {
+      "recommendation": "Content Strategy Alignment for Informational Queries",
+      "action": "For queries seeking information, trends, or analysis, focus on developing high-quality, data-driven content (e.g., whitepapers, research articles, expert interviews) that directly addresses the user's need for comprehensive insights. Ensure this content is published on authoritative domains."
+    },
+    {
+      "recommendation": "Source Authority Building",
+      "action": "Strive to become a recognized authority in your product's domain. This involves securing mentions, citations, and features on reputable third-party websites, academic journals, industry publications, and expert blogs that the AI trusts for factual and analytical information."
+    },
+    {
+      "recommendation": "Structured Data for AI Parsability",
+      "action": "Regardless of content type (product or informational), ensure all key data points, claims, and features are presented in a clear, structured, and easily parsable format (e.g., bullet points, tables, schema markup) to facilitate AI extraction and synthesis."
+    },
+    {
+      "recommendation": "Keyword and Topic Relevance",
+      "action": "For product-related queries, ensure your product's online presence explicitly uses keywords and phrases that align with user intent and AI's understanding of solutions. For informational queries, ensure your content thoroughly covers all facets of the topic, mirroring the depth seen in AI overviews."
+    }
+  ]
+}

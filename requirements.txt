@@ -1,0 +1,11 @@
+fastapi==0.116.1
+uvicorn[standard]==0.35.0
+pydantic==2.11.0
+tenacity==9.0.0
+google-genai
+supabase==2.16.0
+httpx
+pytest
+pytest-asyncio
+respx
+python-dotenv
