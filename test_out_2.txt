@@ -1,0 +1,276 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.6, pytest-9.0.2, pluggy-1.6.0
+rootdir: C:\Users\santo\OneDrive\Desktop\sunny\GodsEye - FrontEnd with Backend py\GodsEye - Bridge Backend Code\Pavan-main\Pavan-main
+plugins: anyio-4.11.0, asyncio-1.3.0, respx-0.22.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 11 items
+
+tests\test_e2e_workflow.py FF.FF.....                                    [ 90%]
+tests\test_concurrency_simple.py .                                       [100%]
+
+================================== FAILURES ===================================
+____________ TestEndToEndWorkflow.test_full_optimization_lifecycle ____________
+
+self = <test_e2e_workflow.TestEndToEndWorkflow object at 0x0000017313BA8590>
+
+    @pytest.mark.asyncio
+    async def test_full_optimization_lifecycle(self):
+        """
+        1. POST /optimize/start  \u2192  202 + snapshot_id
+        2. Background task runs all 3 queries concurrently
+        3. GET /optimize/status   \u2192  "completed", 3/3 queries done
+        """
+        store = FakeSnapshotStore()
+    
+        payload = {
+            "product_id": "prod-e2e",
+            "user_id": "user-e2e",
+            "batch_id": "batch-e2e",
+            "perplexity_queries": ["best shampoo", "best conditioner"],
+            "google_queries": ["best soap"],
+            "chatgpt_queries": [],
+            "client_product_json": FAKE_PRODUCT_JSON,
+        }
+    
+        with (
+            # API-level mocks
+            patch(_P_API_VERIFY, new=_make_mock_verify(True)),
+            patch(_P_API_CREATE, new=_make_mock_create_snapshot(store)),
+            patch(_P_API_STATUS, new=_make_mock_get_snapshot(store)),
+            # Service-level mocks (inside background task)
+            patch(_P_SVC_UPDATE, new=_make_mock_update_snapshot(store)),
+            patch(_P_SVC_FETCH, new=_make_mock_fetch()),
+            patch(_P_SVC_ANALYSIS, side_effect=_make_mock_analysis()),
+            patch(_P_SVC_STORE, side_effect=_make_mock_store()),
+            patch(_P_SVC_REFUND, new=AsyncMock(return_value=True)),
+        ):
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url=BASE_URL
+            ) as client:
+    
+                # \u2500\u2500 Step 1: Start \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+                start_resp = await client.post(
+                    "/api/v1/optimize/start", json=payload
+                )
+    
+                assert start_resp.status_code == 202, (
+                    f"Expected 202, got {start_resp.status_code}: {start_resp.text}"
+                )
+                start_body = start_resp.json()
+                snapshot_id = start_body["snapshot_id"]
+                assert start_body["status"] == "running"
+                assert start_body["total_queries"] == 3
+    
+                # \u2500\u2500 Step 2: Poll status \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+                # BackgroundTasks in ASGI transport run after the response,
+                # so by the time we get here the task should be done.
+                status_resp = await client.get(
+                    f"/api/v1/optimize/status/{snapshot_id}"
+                )
+    
+                assert status_resp.status_code == 200
+                status_body = status_resp.json()
+                assert status_body["snapshot_id"] == snapshot_id
+                assert status_body["status"] == "completed"
+>               assert status_body["completed_queries"] == 3
+E               assert 0 == 3
+
+tests\test_e2e_workflow.py:250: AssertionError
+------------------------------ Captured log call ------------------------------
+WARNING  app.services.analysis_service:analysis_service.py:1094 [Snapshot] Failed to increment no_of_query for snap-e2e-1: {'message': 'invalid input syntax for type uuid: "snap-e2e-1"', 'code': '22P02', 'hint': None, 'details': None}
+WARNING  app.services.analysis_service:analysis_service.py:1094 [Snapshot] Failed to increment no_of_query for snap-e2e-1: {'message': 'invalid input syntax for type uuid: "snap-e2e-1"', 'code': '22P02', 'hint': None, 'details': None}
+WARNING  app.services.analysis_service:analysis_service.py:1094 [Snapshot] Failed to increment no_of_query for snap-e2e-1: {'message': 'invalid input syntax for type uuid: "snap-e2e-1"', 'code': '22P02', 'hint': None, 'details': None}
+__ TestEndToEndWorkflow.test_concurrent_execution_is_faster_than_sequential ___
+
+self = <test_e2e_workflow.TestEndToEndWorkflow object at 0x0000017313BA9290>
+
+    @pytest.mark.asyncio
+    async def test_concurrent_execution_is_faster_than_sequential(self):
+        """
+        3 queries with 50ms delay each \u2192 should finish well under 3\xd7 time.
+        """
+        store = FakeSnapshotStore()
+        per_query = SIMULATED_DELAY
+        num_queries = 3
+    
+        payload = {
+            "product_id": "prod-perf",
+            "user_id": "user-perf",
+            "batch_id": "batch-perf",
+            "perplexity_queries": ["q1", "q2", "q3", "q4", "q5"],
+            "google_queries": [],
+            "chatgpt_queries": [],
+            "client_product_json": FAKE_PRODUCT_JSON,
+        }
+    
+        with (
+            patch(_P_API_VERIFY, new=_make_mock_verify(True)),
+            patch(_P_API_CREATE, new=_make_mock_create_snapshot(store)),
+            patch(_P_API_STATUS, new=_make_mock_get_snapshot(store)),
+            patch(_P_SVC_UPDATE, new=_make_mock_update_snapshot(store)),
+            patch(_P_SVC_FETCH, new=_make_mock_fetch(delay=per_query)),
+            patch(_P_SVC_ANALYSIS, side_effect=_make_mock_analysis(delay=per_query)),
+            patch(_P_SVC_STORE, side_effect=_make_mock_store(delay=0.01)),
+            patch(_P_SVC_REFUND, new=AsyncMock(return_value=True)),
+        ):
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url=BASE_URL
+            ) as client:
+                start = time.monotonic()
+                resp = await client.post("/api/v1/optimize/start", json=payload)
+                elapsed = time.monotonic() - start
+    
+        assert resp.status_code == 202
+        # Sequential estimate: N * (scrape + analysis) = 3 * 2 * 0.05 = 0.30s
+        sequential_estimate = num_queries * 2 * per_query
+>       assert elapsed < sequential_estimate * 0.80, (
+            f"E2E took {elapsed:.2f}s vs sequential estimate {sequential_estimate:.2f}s"
+        )
+E       AssertionError: E2E took 3.08s vs sequential estimate 0.30s
+E       assert 3.0780000000086147 < (0.30000000000000004 * 0.8)
+
+tests\test_e2e_workflow.py:291: AssertionError
+------------------------------ Captured log call ------------------------------
+WARNING  app.services.analysis_service:analysis_service.py:1094 [Snapshot] Failed to increment no_of_query for snap-e2e-1: {'message': 'invalid input syntax for type uuid: "snap-e2e-1"', 'code': '22P02', 'hint': None, 'details': None}
+WARNING  app.services.analysis_service:analysis_service.py:1094 [Snapshot] Failed to increment no_of_query for snap-e2e-1: {'message': 'invalid input syntax for type uuid: "snap-e2e-1"', 'code': '22P02', 'hint': None, 'details': None}
+WARNING  app.services.analysis_service:analysis_service.py:1094 [Snapshot] Failed to increment no_of_query for snap-e2e-1: {'message': 'invalid input syntax for type uuid: "snap-e2e-1"', 'code': '22P02', 'hint': None, 'details': None}
+WARNING  app.services.analysis_service:analysis_service.py:1094 [Snapshot] Failed to increment no_of_query for snap-e2e-1: {'message': 'invalid input syntax for type uuid: "snap-e2e-1"', 'code': '22P02', 'hint': None, 'details': None}
+WARNING  app.services.analysis_service:analysis_service.py:1094 [Snapshot] Failed to increment no_of_query for snap-e2e-1: {'message': 'invalid input syntax for type uuid: "snap-e2e-1"', 'code': '22P02', 'hint': None, 'details': None}
+_____ TestEndToEndPartialFailure.test_partial_failure_marked_in_snapshot ______
+
+self = <test_e2e_workflow.TestEndToEndPartialFailure object at 0x0000017313BAA6D0>
+
+    @pytest.mark.asyncio
+    async def test_partial_failure_marked_in_snapshot(self):
+        store = FakeSnapshotStore()
+        call_count = 0
+    
+        async def _flaky_fetch(pipeline, query, settings, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if query == "fail-me":
+                raise Exception("Scraper exploded")
+            await asyncio.sleep(0.01)
+            return {**FAKE_SCRAPED, "query": query}
+    
+        with (
+            patch(_P_API_VERIFY, new=_make_mock_verify(True)),
+            patch(_P_API_CREATE, new=_make_mock_create_snapshot(store)),
+            patch(_P_API_STATUS, new=_make_mock_get_snapshot(store)),
+            patch(_P_SVC_UPDATE, new=_make_mock_update_snapshot(store)),
+            patch(_P_SVC_FETCH, new=_flaky_fetch),
+            patch(_P_SVC_ANALYSIS, side_effect=_make_mock_analysis(delay=0.01)),
+            patch(_P_SVC_STORE, side_effect=_make_mock_store(delay=0.01)),
+            patch(_P_SVC_REFUND, new=AsyncMock(return_value=True)),
+        ):
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url=BASE_URL
+            ) as client:
+                start_resp = await client.post("/api/v1/optimize/start", json={
+                    "product_id": "prod-partial",
+                    "user_id": "user-partial",
+                    "batch_id": "batch-partial",
+                    "perplexity_queries": ["good-query", "fail-me"],
+                    "google_queries": [],
+                    "client_product_json": FAKE_PRODUCT_JSON,
+                })
+    
+                assert start_resp.status_code == 202
+                snapshot_id = start_resp.json()["snapshot_id"]
+    
+                status_resp = await client.get(
+                    f"/api/v1/optimize/status/{snapshot_id}"
+                )
+    
+        body = status_resp.json()
+        assert body["status"] == "partial"  # some succeeded, some failed
+>       assert body["completed_queries"] == 1
+E       assert 0 == 1
+
+tests\test_e2e_workflow.py:384: AssertionError
+------------------------------ Captured log call ------------------------------
+ERROR    app.services.analysis_service:analysis_service.py:1042 [Pipeline] Failed pipeline=perplexity query='fail-me' error=Scraper exploded
+Traceback (most recent call last):
+  File "C:\Users\santo\OneDrive\Desktop\sunny\GodsEye - FrontEnd with Backend py\GodsEye - Bridge Backend Code\Pavan-main\Pavan-main\app\services\analysis_service.py", line 982, in process_single_query_pipeline
+    scraped_data = await fetch_ai_search_data(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\santo\OneDrive\Desktop\sunny\GodsEye - FrontEnd with Backend py\GodsEye - Bridge Backend Code\Pavan-main\Pavan-main\tests\test_e2e_workflow.py", line 349, in _flaky_fetch
+    raise Exception("Scraper exploded")
+Exception: Scraper exploded
+WARNING  app.services.analysis_service:analysis_service.py:1094 [Snapshot] Failed to increment no_of_query for snap-e2e-1: {'message': 'invalid input syntax for type uuid: "snap-e2e-1"', 'code': '22P02', 'hint': None, 'details': None}
+WARNING  app.services.analysis_service:analysis_service.py:258 [Background] 1/2 queries failed for snapshot snap-e2e-1 — refunding 1 credits to user user-partial
+________ TestEndToEndMixedPipelines.test_mixed_pipelines_all_complete _________
+
+self = <test_e2e_workflow.TestEndToEndMixedPipelines object at 0x0000017313BAB0D0>
+
+    @pytest.mark.asyncio
+    async def test_mixed_pipelines_all_complete(self):
+        store = FakeSnapshotStore()
+        observed_pipelines: List[str] = []
+    
+        async def _tracking_fetch(pipeline, query, settings, **kwargs):
+            observed_pipelines.append(pipeline)
+            await asyncio.sleep(0.01)
+            return {**FAKE_SCRAPED, "query": query, "pipeline": pipeline}
+    
+        with (
+            patch(_P_API_VERIFY, new=_make_mock_verify(True)),
+            patch(_P_API_CREATE, new=_make_mock_create_snapshot(store)),
+            patch(_P_API_STATUS, new=_make_mock_get_snapshot(store)),
+            patch(_P_SVC_UPDATE, new=_make_mock_update_snapshot(store)),
+            patch(_P_SVC_FETCH, new=_tracking_fetch),
+            patch(_P_SVC_ANALYSIS, side_effect=_make_mock_analysis(delay=0.01)),
+            patch(_P_SVC_STORE, side_effect=_make_mock_store(delay=0.01)),
+            patch(_P_SVC_REFUND, new=AsyncMock(return_value=True)),
+        ):
+            async with AsyncClient(
+                transport=ASGITransport(app=app), base_url=BASE_URL
+            ) as client:
+                resp = await client.post("/api/v1/optimize/start", json={
+                    "product_id": "prod-mix",
+                    "user_id": "user-mix",
+                    "batch_id": "batch-mix",
+                    "perplexity_queries": ["pq1", "pq2"],
+                    "google_queries": ["gq1", "gq2"],
+                    "client_product_json": FAKE_PRODUCT_JSON,
+                })
+    
+                assert resp.status_code == 202
+                sid = resp.json()["snapshot_id"]
+    
+                status = await client.get(f"/api/v1/optimize/status/{sid}")
+    
+        assert status.json()["status"] == "completed"
+>       assert status.json()["completed_queries"] == 4
+E       assert 0 == 4
+
+tests\test_e2e_workflow.py:432: AssertionError
+------------------------------ Captured log call ------------------------------
+WARNING  app.services.analysis_service:analysis_service.py:1094 [Snapshot] Failed to increment no_of_query for snap-e2e-1: {'message': 'invalid input syntax for type uuid: "snap-e2e-1"', 'code': '22P02', 'hint': None, 'details': None}
+WARNING  app.services.analysis_service:analysis_service.py:1094 [Snapshot] Failed to increment no_of_query for snap-e2e-1: {'message': 'invalid input syntax for type uuid: "snap-e2e-1"', 'code': '22P02', 'hint': None, 'details': None}
+WARNING  app.services.analysis_service:analysis_service.py:1094 [Snapshot] Failed to increment no_of_query for snap-e2e-1: {'message': 'invalid input syntax for type uuid: "snap-e2e-1"', 'code': '22P02', 'hint': None, 'details': None}
+WARNING  app.services.analysis_service:analysis_service.py:1094 [Snapshot] Failed to increment no_of_query for snap-e2e-1: {'message': 'invalid input syntax for type uuid: "snap-e2e-1"', 'code': '22P02', 'hint': None, 'details': None}
+============================== warnings summary ===============================
+..\..\..\..\..\..\..\AppData\Local\Programs\Python\Python311\Lib\site-packages\supabase\__init__.py:1
+  C:\Users\santo\AppData\Local\Programs\Python\Python311\Lib\site-packages\supabase\__init__.py:1: DeprecationWarning: The `gotrue` package is deprecated, is not going to receive updates in the future. Please, use `supabase_auth` instead.
+    from gotrue.errors import (
+
+..\..\..\..\..\..\..\AppData\Local\Programs\Python\Python311\Lib\site-packages\supabase\__init__.py:15
+  C:\Users\santo\AppData\Local\Programs\Python\Python311\Lib\site-packages\supabase\__init__.py:15: DeprecationWarning: The `supafunc` package is deprecated, is not going to receive updates in the future. Please, use `supabase_functions` instead.
+    from supafunc.errors import FunctionsError, FunctionsHttpError, FunctionsRelayError
+
+tests/test_e2e_workflow.py: 13 warnings
+  C:\Users\santo\AppData\Local\Programs\Python\Python311\Lib\site-packages\supabase\_sync\client.py:303: DeprecationWarning: The 'timeout' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+tests/test_e2e_workflow.py: 13 warnings
+  C:\Users\santo\AppData\Local\Programs\Python\Python311\Lib\site-packages\supabase\_sync\client.py:303: DeprecationWarning: The 'verify' parameter is deprecated. Please configure it in the http client instead.
+    return SyncPostgrestClient(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_e2e_workflow.py::TestEndToEndWorkflow::test_full_optimization_lifecycle
+FAILED tests/test_e2e_workflow.py::TestEndToEndWorkflow::test_concurrent_execution_is_faster_than_sequential
+FAILED tests/test_e2e_workflow.py::TestEndToEndPartialFailure::test_partial_failure_marked_in_snapshot
+FAILED tests/test_e2e_workflow.py::TestEndToEndMixedPipelines::test_mixed_pipelines_all_complete
+================== 4 failed, 7 passed, 28 warnings in 12.03s ==================

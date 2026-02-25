@@ -49,6 +49,7 @@ async def test_simple_concurrency_modes():
             product_id="test-prod-123",
             perplexity_queries=perplexity_input,
             google_queries=google_input,
+            chatgpt_queries=[],
             snapshot_id="snap-test-123",  # triggers DB increment logic
             settings=settings,
             client_product_json={},

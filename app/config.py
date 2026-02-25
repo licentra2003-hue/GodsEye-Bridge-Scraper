@@ -60,6 +60,11 @@ class Settings(BaseModel):
         default_factory=lambda: os.getenv("GOOGLE_AI_MODE", "new_ai_mode")  # type: ignore[return-value]
     )
 
+    # ── ChatGPT Enable Switch ─────────────────────────────────────────
+    enable_chatgpt: bool = Field(
+        default_factory=lambda: os.getenv("ENABLE_CHATGPT", "false").lower() == "true"
+    )
+
     # ── Scraper URLs (all 3 endpoints) ────────────────────────────────
     scraper_url_perplexity: str = Field(
         default_factory=lambda: os.getenv(
@@ -77,6 +82,12 @@ class Settings(BaseModel):
         default_factory=lambda: os.getenv(
             "SCRAPER_URL_NEW_AI_MODE",
             "https://discerning-dream-production-a744.up.railway.app/api/v1/scrape",
+        )
+    )
+    scraper_url_chatgpt: str = Field(
+        default_factory=lambda: os.getenv(
+            "SCRAPER_URL_CHATGPT",
+            "https://chatgpt-scraper-api-production.up.railway.app/api/scrape",
         )
     )
 
@@ -104,10 +115,14 @@ class Settings(BaseModel):
         else:
             google_url = self.scraper_url_google_overview
 
-        return {
+        pipelines = {
             "perplexity": self.scraper_url_perplexity,
             "google_overview": google_url,
         }
+        if self.enable_chatgpt:
+            pipelines["chatgpt"] = self.scraper_url_chatgpt
+            
+        return pipelines
 
     @property
     def active_google_scraper_mode(self) -> GoogleAIMode:

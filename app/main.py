@@ -140,7 +140,10 @@ async def optimization_start(
     2. Dispatch ``run_optimization_background`` as a ``BackgroundTask``.
     3. Return ``HTTP 202 Accepted`` with the ``snapshot_id`` immediately.
     """
-    all_queries = payload.perplexity_queries + payload.google_queries
+    if not settings.enable_chatgpt and payload.chatgpt_queries:
+        raise HTTPException(status_code=400, detail="ChatGPT scraper is disabled")
+
+    all_queries = payload.perplexity_queries + payload.google_queries + payload.chatgpt_queries
     total = len(all_queries)
 
     if total == 0:
@@ -178,6 +181,7 @@ async def optimization_start(
         product_id=payload.product_id,
         perplexity_queries=payload.perplexity_queries,
         google_queries=payload.google_queries,
+        chatgpt_queries=payload.chatgpt_queries,
         snapshot_id=snapshot_id,
         settings=settings,
         client_product_json=payload.client_product_json,

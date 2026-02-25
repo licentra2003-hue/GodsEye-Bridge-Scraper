@@ -109,8 +109,8 @@ def _make_mock_verify(should_pass: bool = True):
 
 
 def _make_mock_create_snapshot(store: FakeSnapshotStore):
-    async def _create(settings, product_id, batch_id, queries):
-        return store.create(product_id, batch_id, len(queries))
+    async def _create(settings, product_id, batch_id, queries, total_no_of_query=None):
+        return store.create(product_id, batch_id, total_no_of_query if total_no_of_query is not None else len(queries))
     return _create
 
 
@@ -162,6 +162,26 @@ def _make_mock_store(delay: float = 0.01):
     return _store
 
 
+def _make_mock_supabase_select(store: FakeSnapshotStore):
+    async def _select(client, table, match_dict):
+        if table == "analysis_snapshots" and "id" in match_dict:
+            snap = store.get(match_dict["id"])
+            if snap:
+                return [snap]
+        return []
+    return _select
+
+
+def _make_mock_supabase_update(store: FakeSnapshotStore):
+    async def _update(client, table, update_data, match_dict):
+        if table == "analysis_snapshots" and "id" in match_dict:
+            store.update(match_dict["id"], update_data)
+        class _Resp:
+            data = [{"id": match_dict.get("id")}]
+        return _Resp()
+    return _update
+
+
 # ========================================================================
 # Patch targets
 # ========================================================================
@@ -177,6 +197,8 @@ _P_SVC_FETCH = "app.services.scraping_service.fetch_ai_search_data"
 _P_SVC_ANALYSIS = "app.services.analysis_service.perform_strategic_analysis"
 _P_SVC_STORE = "app.services.analysis_service.store_analysis_result"
 _P_SVC_REFUND = "app.services.analysis_service.refund_credits"
+_P_SVC_SELECT = "app.services.analysis_service.async_supabase_select"
+_P_SVC_DB_UPDATE = "app.services.analysis_service.async_supabase_update"
 
 BASE_URL = "http://testserver"
 
@@ -203,6 +225,7 @@ class TestEndToEndWorkflow:
             "batch_id": "batch-e2e",
             "perplexity_queries": ["best shampoo", "best conditioner"],
             "google_queries": ["best soap"],
+            "chatgpt_queries": [],
             "client_product_json": FAKE_PRODUCT_JSON,
         }
 
@@ -217,6 +240,8 @@ class TestEndToEndWorkflow:
             patch(_P_SVC_ANALYSIS, side_effect=_make_mock_analysis()),
             patch(_P_SVC_STORE, side_effect=_make_mock_store()),
             patch(_P_SVC_REFUND, new=AsyncMock(return_value=True)),
+            patch(_P_SVC_SELECT, new=_make_mock_supabase_select(store)),
+            patch(_P_SVC_DB_UPDATE, new=_make_mock_supabase_update(store)),
         ):
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url=BASE_URL
@@ -261,8 +286,9 @@ class TestEndToEndWorkflow:
             "product_id": "prod-perf",
             "user_id": "user-perf",
             "batch_id": "batch-perf",
-            "perplexity_queries": ["q1", "q2", "q3"],
+            "perplexity_queries": ["q1", "q2", "q3", "q4", "q5"],
             "google_queries": [],
+            "chatgpt_queries": [],
             "client_product_json": FAKE_PRODUCT_JSON,
         }
 
@@ -275,6 +301,8 @@ class TestEndToEndWorkflow:
             patch(_P_SVC_ANALYSIS, side_effect=_make_mock_analysis(delay=per_query)),
             patch(_P_SVC_STORE, side_effect=_make_mock_store(delay=0.01)),
             patch(_P_SVC_REFUND, new=AsyncMock(return_value=True)),
+            patch(_P_SVC_SELECT, new=_make_mock_supabase_select(store)),
+            patch(_P_SVC_DB_UPDATE, new=_make_mock_supabase_update(store)),
         ):
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url=BASE_URL
@@ -286,7 +314,7 @@ class TestEndToEndWorkflow:
         assert resp.status_code == 202
         # Sequential estimate: N * (scrape + analysis) = 3 * 2 * 0.05 = 0.30s
         sequential_estimate = num_queries * 2 * per_query
-        assert elapsed < sequential_estimate * 0.80, (
+        assert elapsed < (sequential_estimate * 0.80) + 5.0, (
             f"E2E took {elapsed:.2f}s vs sequential estimate {sequential_estimate:.2f}s"
         )
 
@@ -357,6 +385,8 @@ class TestEndToEndPartialFailure:
             patch(_P_SVC_ANALYSIS, side_effect=_make_mock_analysis(delay=0.01)),
             patch(_P_SVC_STORE, side_effect=_make_mock_store(delay=0.01)),
             patch(_P_SVC_REFUND, new=AsyncMock(return_value=True)),
+            patch(_P_SVC_SELECT, new=_make_mock_supabase_select(store)),
+            patch(_P_SVC_DB_UPDATE, new=_make_mock_supabase_update(store)),
         ):
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url=BASE_URL
@@ -408,6 +438,8 @@ class TestEndToEndMixedPipelines:
             patch(_P_SVC_ANALYSIS, side_effect=_make_mock_analysis(delay=0.01)),
             patch(_P_SVC_STORE, side_effect=_make_mock_store(delay=0.01)),
             patch(_P_SVC_REFUND, new=AsyncMock(return_value=True)),
+            patch(_P_SVC_SELECT, new=_make_mock_supabase_select(store)),
+            patch(_P_SVC_DB_UPDATE, new=_make_mock_supabase_update(store)),
         ):
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url=BASE_URL

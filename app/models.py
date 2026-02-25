@@ -77,6 +77,7 @@ class OptimizationStartRequest(BaseModel):
     batch_id: str             # Must already exist in query_batches table
     perplexity_queries: List[str] = Field(default_factory=list)
     google_queries: List[str] = Field(default_factory=list)
+    chatgpt_queries: List[str] = Field(default_factory=list)
     client_product_json: Any = None
     api_key: Optional[str] = None
     debug: bool = False

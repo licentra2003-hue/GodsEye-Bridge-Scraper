@@ -355,6 +355,130 @@ async def _fetch_new_ai_mode(
 
 
 # ═══════════════════════════════════════════════════════════════════════
+# ChatGPT — Job-based polling
+# ═══════════════════════════════════════════════════════════════════════
+
+async def _submit_chatgpt_job(
+    client: httpx.AsyncClient,
+    scrape_url: str,
+    query: str,
+    api_key: Optional[str] = None,
+) -> str:
+    """Submit a ChatGPT scraping job and return the job_id."""
+    headers: Dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    # The scrape_url might already be /api/scrape, depending on env Var. Ensure it is correct.
+    submit_url = scrape_url
+    if not submit_url.endswith("/api/scrape"):
+        submit_url = submit_url.rstrip("/") + "/api/scrape"
+
+    logger.info("[Scraper:chatgpt] Submitting job  url=%s  query=%r", submit_url, query)
+
+    response = await client.post(
+        submit_url,
+        json={"query": query},
+        headers=headers,
+    )
+    if response.status_code != 201:
+        raise ScrapingError(f"Failed to submit ChatGPT job: {response.status_code} - {response.text}")
+        
+    data = response.json()
+    job_id = data.get("job_id")
+    if not job_id:
+        raise ScrapingError(f"ChatGPT scraper did not return a job_id: {data}")
+
+    logger.info("[Scraper:chatgpt] Job submitted  job_id=%s", job_id)
+    return job_id
+
+
+async def _poll_chatgpt_result(
+    client: httpx.AsyncClient,
+    scrape_url: str,
+    job_id: str,
+    *,
+    api_key: Optional[str] = None,
+    poll_interval: float = 3.0,
+    max_attempts: int = 100,
+) -> Dict[str, Any]:
+    """Poll the ChatGPT result until completed."""
+    # Base URL parsing
+    if "/api/scrape" in scrape_url:
+        base_url = scrape_url.replace("/api/scrape", "/api/result")
+    else:
+        parsed = urlparse(scrape_url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        base_url = f"{origin}/api/result"
+        
+    poll_url = f"{base_url}/{job_id}"
+
+    headers: Dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    attempt = 0
+    while True:
+        attempt += 1
+        if attempt > max_attempts:
+            raise ScrapingTimeoutError(
+                f"Polling timed out after {max_attempts} attempts for ChatGPT job {job_id}"
+            )
+
+        logger.debug(
+            "[Scraper:chatgpt] poll attempt=%d/%d  interval=%.1fs  job_id=%s",
+            attempt, max_attempts, poll_interval, job_id,
+        )
+
+        response = await client.get(poll_url, headers=headers)
+        response.raise_for_status()
+
+        data: Dict[str, Any] = response.json()
+        status = (data.get("status", "") or "").lower()
+
+        is_completed = status == "completed"
+        is_failed = status == "failed"
+        has_data = (
+            isinstance(data.get("data"), dict) and
+            data["data"].get("success") is not None
+        )
+        
+        if is_completed or is_failed or has_data:
+            if is_failed or (has_data and data["data"].get("success") is False):
+                error_msg = (
+                    data.get("error_message") or
+                    (data.get("data", {}).get("error_message") if isinstance(data.get("data"), dict) else None) or
+                    "Job failed to complete"
+                )
+                raise ScrapingError(f"ChatGPT job {job_id} failed: {error_msg}")
+
+            logger.info("[Scraper:chatgpt] Job completed  job_id=%s", job_id)
+            return data.get("result", data.get("data", data))
+
+        # Still processing — wait then retry
+        await asyncio.sleep(poll_interval)
+
+
+async def _fetch_chatgpt(
+    client: httpx.AsyncClient,
+    scrape_url: str,
+    query: str,
+    settings: Settings,
+    api_key: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Submit → poll flow for ChatGPT scraper."""
+    job_id = await _submit_chatgpt_job(client, scrape_url, query, api_key)
+    return await _poll_chatgpt_result(
+        client,
+        scrape_url,
+        job_id,
+        api_key=api_key,
+        poll_interval=settings.scraper_poll_initial_interval,
+        max_attempts=settings.scraper_poll_max_attempts,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════
 # Pipeline → handler mapping
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -363,6 +487,7 @@ _SCRAPER_HANDLERS: Dict[str, Callable] = {
     "perplexity": _fetch_perplexity,
     "google_overview": _fetch_google_overview,
     "new_ai_mode": _fetch_new_ai_mode,
+    "chatgpt": _fetch_chatgpt,
 }
 
 
@@ -390,6 +515,11 @@ def _resolve_handler(pipeline: str, settings: Settings) -> Callable:
             "[Scraper] google_overview pipeline using mode=%s", mode
         )
         return handler
+
+    if pipeline == "chatgpt":
+        if not settings.enable_chatgpt:
+            raise ScrapingError("ChatGPT pipeline is disabled in settings.")
+        return _SCRAPER_HANDLERS["chatgpt"]
 
     raise ScrapingError(
         f"No handler registered for pipeline: '{pipeline}'. "

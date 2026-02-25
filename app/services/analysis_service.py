@@ -218,6 +218,7 @@ async def run_optimization_background(
     product_id: str,
     perplexity_queries: List[str],
     google_queries: List[str],
+    chatgpt_queries: List[str],
     snapshot_id: str,
     settings: Settings,
     client_product_json: Any,
@@ -233,13 +234,14 @@ async def run_optimization_background(
 
     If any queries fail, credits for those queries are refunded to the user.
     """
-    total_queries = len(perplexity_queries) + len(google_queries)
+    total_queries = len(perplexity_queries) + len(google_queries) + len(chatgpt_queries)
 
     try:
         results = await run_optimization_batch(
             product_id=product_id,
             perplexity_queries=perplexity_queries,
             google_queries=google_queries,
+            chatgpt_queries=chatgpt_queries,
             snapshot_id=snapshot_id,
             settings=settings,
             client_product_json=client_product_json,
@@ -598,6 +600,26 @@ def _store_analysis_result_supabase(
         if debug:
             logger.info(
                 "[DEBUG] Stored Perplexity analysis with ID: %s",
+                response.data[0].get("id") if response.data else "unknown",
+            )
+        return response.data[0] if response.data else {}
+
+    if pipeline == "chatgpt":
+        data_to_insert = {
+            "product_id": product_id,
+            "search_query": search_query,
+            "chatgpt_analysis": analysis_result,
+            "citations": source_links or [],
+            "raw_serp_results": raw_serp_results or {},
+        }
+
+        if snapshot_id:
+            data_to_insert["snapshot_id"] = snapshot_id
+
+        response = supabase.table("product_analysis_chatgpt").insert(data_to_insert).execute()
+        if debug:
+            logger.info(
+                "[DEBUG] Stored ChatGPT analysis with ID: %s",
                 response.data[0].get("id") if response.data else "unknown",
             )
         return response.data[0] if response.data else {}
@@ -1100,6 +1122,7 @@ async def run_optimization_batch(
     product_id: str,
     perplexity_queries: List[str],
     google_queries: List[str],
+    chatgpt_queries: List[str],
     snapshot_id: Optional[str] = None,
     *,
     settings: Settings,
@@ -1155,9 +1178,22 @@ async def run_optimization_batch(
         )
         tasks.append(_run_and_increment(coro, snapshot_id, settings))
 
+    for query in chatgpt_queries:
+        coro = process_single_query_pipeline(
+            product_id=product_id,
+            query=query,
+            pipeline="chatgpt",
+            snapshot_id=snapshot_id,
+            settings=settings,
+            client_product_json=client_product_json,
+            api_key=api_key,
+            debug=debug,
+        )
+        tasks.append(_run_and_increment(coro, snapshot_id, settings))
+
     logger.info(
-        "[Batch] Dispatching %d tasks  (perplexity=%d, google=%d)  product_id=%s",
-        len(tasks), len(perplexity_queries), len(google_queries), product_id,
+        "[Batch] Dispatching %d tasks  (perplexity=%d, google=%d, chatgpt=%d)  product_id=%s",
+        len(tasks), len(perplexity_queries), len(google_queries), len(chatgpt_queries), product_id,
     )
 
     results = await asyncio.gather(*tasks, return_exceptions=True)

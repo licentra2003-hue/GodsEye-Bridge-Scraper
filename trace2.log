@@ -1,0 +1,38 @@
+============================= test session starts =============================
+platform win32 -- Python 3.11.6, pytest-9.0.2, pluggy-1.6.0 -- C:\Users\santo\AppData\Local\Programs\Python\Python311\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\santo\OneDrive\Desktop\sunny\GodsEye - FrontEnd with Backend py\GodsEye - Bridge Backend Code\Pavan-main\Pavan-main
+plugins: anyio-4.11.0, asyncio-1.3.0, respx-0.22.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collecting ... collected 10 items
+
+tests/test_e2e_workflow.py::TestEndToEndWorkflow::test_full_optimization_lifecycle PASSED [ 10%]
+tests/test_e2e_workflow.py::TestEndToEndWorkflow::test_concurrent_execution_is_faster_than_sequential FAILED [ 20%]
+tests/test_e2e_workflow.py::TestEndToEndCreditFailure::test_no_credits_returns_402_and_no_background_work PASSED [ 30%]
+tests/test_e2e_workflow.py::TestEndToEndPartialFailure::test_partial_failure_marked_in_snapshot PASSED [ 40%]
+tests/test_e2e_workflow.py::TestEndToEndMixedPipelines::test_mixed_pipelines_all_complete PASSED [ 50%]
+tests/test_e2e_workflow.py::TestEndToEndStatusPolling::test_snapshot_not_found_returns_404 PASSED [ 60%]
+tests/test_e2e_workflow.py::TestEndToEndStatusPolling::test_running_status_before_background_completes PASSED [ 70%]
+tests/test_e2e_workflow.py::TestExistingEndpointsRegression::test_health_endpoint PASSED [ 80%]
+tests/test_e2e_workflow.py::TestExistingEndpointsRegression::test_normalize_ai_search_endpoint PASSED [ 90%]
+tests/test_e2e_workflow.py::TestExistingEndpointsRegression::test_clean_json_endpoint PASSED [100%]
+
+================================== FAILURES ===================================
+__ TestEndToEndWorkflow.test_concurrent_execution_is_faster_than_sequential ___
+tests\test_e2e_workflow.py:317: in test_concurrent_execution_is_faster_than_sequential
+    assert elapsed < sequential_estimate * 0.80, (
+E   AssertionError: E2E took 2.22s vs sequential estimate 0.30s
+E   assert 2.2179999999934807 < (0.30000000000000004 * 0.8)
+============================== warnings summary ===============================
+..\..\..\..\..\..\..\AppData\Local\Programs\Python\Python311\Lib\site-packages\supabase\__init__.py:1
+  C:\Users\santo\AppData\Local\Programs\Python\Python311\Lib\site-packages\supabase\__init__.py:1: DeprecationWarning: The `gotrue` package is deprecated, is not going to receive updates in the future. Please, use `supabase_auth` instead.
+    from gotrue.errors import (
+
+..\..\..\..\..\..\..\AppData\Local\Programs\Python\Python311\Lib\site-packages\supabase\__init__.py:15
+  C:\Users\santo\AppData\Local\Programs\Python\Python311\Lib\site-packages\supabase\__init__.py:15: DeprecationWarning: The `supafunc` package is deprecated, is not going to receive updates in the future. Please, use `supabase_functions` instead.
+    from supafunc.errors import FunctionsError, FunctionsHttpError, FunctionsRelayError
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=========================== short test summary info ===========================
+FAILED tests/test_e2e_workflow.py::TestEndToEndWorkflow::test_concurrent_execution_is_faster_than_sequential
+=================== 1 failed, 9 passed, 2 warnings in 7.01s ===================
