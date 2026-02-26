@@ -607,8 +607,8 @@ def _store_analysis_result_supabase(
     if pipeline == "chatgpt":
         data_to_insert = {
             "product_id": product_id,
-            "search_query": search_query,
-            "chatgpt_analysis": analysis_result,
+            "optimization_prompt": search_query,
+            "optimization_analysis": analysis_result,
             "citations": source_links or [],
             "raw_serp_results": raw_serp_results or {},
         }
