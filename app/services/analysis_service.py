@@ -8,6 +8,8 @@ import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+import httpx
+
 from google import genai
 from google.genai import types
 from supabase import Client, create_client
@@ -137,7 +139,7 @@ async def create_analysis_snapshot(
                         "status": "running",
                         "started_at": now_iso,
                         "completed_at": None,
-                        "total_no_of_query": total,
+                        "total_no_of_query": max(snap_total, total),
                     },
                     {"id": snap_id},
                 )
@@ -233,6 +235,9 @@ async def run_optimization_background(
     then sets the final status (completed / partial / failed).
 
     If any queries fail, credits for those queries are refunded to the user.
+
+    After the batch finishes, inserts a comprehensive ``analysis_history``
+    record with the UUIDs of all successfully stored analysis records.
     """
     total_queries = len(perplexity_queries) + len(google_queries) + len(chatgpt_queries)
 
@@ -261,22 +266,44 @@ async def run_optimization_background(
             )
             await refund_credits(settings, user_id, failures_count)
 
-        # --- Update snapshot status ---
+        # --- Determine final status ---
         if failures_count == 0:
-            await update_snapshot_status(
-                settings, snapshot_id,
-                status="completed",
-            )
+            final_status = "completed"
         elif len(successes) > 0:
-            await update_snapshot_status(
-                settings, snapshot_id,
-                status="partial",
-            )
+            final_status = "partial"
         else:
-            await update_snapshot_status(
-                settings, snapshot_id,
-                status="failed",
-            )
+            final_status = "failed"
+
+        await update_snapshot_status(settings, snapshot_id, status=final_status)
+
+        # --- Log analysis_history with all analysis UUIDs ---
+        await _log_analysis_history(
+            settings=settings,
+            user_id=user_id,
+            product_id=product_id,
+            credits_used=len(successes),
+            status=final_status,
+            results=successes,
+        )
+
+        # --- Auto-trigger SOV calculation (gated by CALCULATE_SOV) ---
+        if settings.calculate_sov and final_status in ("completed", "partial"):
+            engines_to_run: List[str] = []
+            if len(google_queries) > 0:
+                engines_to_run.append("google")
+            if len(perplexity_queries) > 0:
+                engines_to_run.append("perplexity")
+            if len(chatgpt_queries) > 0:
+                engines_to_run.append("chatgpt")
+
+            if engines_to_run:
+                await _trigger_sov_calculation(
+                    settings=settings,
+                    product_id=product_id,
+                    snapshot_id=snapshot_id,
+                    engines=engines_to_run,
+                    debug=debug,
+                )
 
     except Exception as exc:
         logger.exception("[Background] Batch failed for snapshot %s: %s", snapshot_id, exc)
@@ -290,8 +317,134 @@ async def run_optimization_background(
             settings, snapshot_id,
             status="failed",
         )
+        # Log a failed history entry (0 credits used since all refunded)
+        await _log_analysis_history(
+            settings=settings,
+            user_id=user_id,
+            product_id=product_id,
+            credits_used=0,
+            status="failed",
+            results=[],
+        )
 
 
+async def _log_analysis_history(
+    *,
+    settings: Settings,
+    user_id: str,
+    product_id: str,
+    credits_used: int,
+    status: str,
+    results: List[Dict[str, Any]],
+) -> None:
+    """
+    Insert a row into ``analysis_history`` with the UUIDs of all
+    successfully stored analysis records.
+
+    Extracts the first stored record ID from each pipeline type
+    (google_overview, perplexity, chatgpt) and maps them to the
+    corresponding foreign key columns.
+    """
+    # --- Extract the first UUID per pipeline from stored records ---
+    google_id: Optional[str] = None
+    perplexity_id: Optional[str] = None
+    chatgpt_id: Optional[str] = None
+
+    for result in results:
+        pipeline = result.get("pipeline", "")
+        stored = result.get("stored_record") or {}
+        record_id = stored.get("id")
+        if not record_id:
+            continue
+
+        if pipeline == "google_overview" and not google_id:
+            google_id = record_id
+        elif pipeline == "perplexity" and not perplexity_id:
+            perplexity_id = record_id
+        elif pipeline == "chatgpt" and not chatgpt_id:
+            chatgpt_id = record_id
+
+    history_row: Dict[str, Any] = {
+        "user_id": user_id,
+        "product_id": product_id,
+        "credits_used": credits_used,
+        "analysis_type": "full_optimization",
+        "status": status,
+    }
+
+    if google_id:
+        history_row["google_analysis_id"] = google_id
+    if perplexity_id:
+        history_row["perplexity_analysis_id"] = perplexity_id
+    if chatgpt_id:
+        history_row["chatgpt_analysis_id"] = chatgpt_id
+
+    try:
+        supabase = get_supabase_client(settings)
+        await async_supabase_insert(supabase, "analysis_history", history_row)
+        logger.info(
+            "[History] Logged analysis_history for user %s, product %s — credits_used=%d, status=%s, "
+            "google_id=%s, perplexity_id=%s, chatgpt_id=%s",
+            user_id, product_id, credits_used, status,
+            google_id, perplexity_id, chatgpt_id,
+        )
+    except Exception as exc:
+        logger.exception(
+            "[History] Failed to log analysis_history for user %s: %s",
+            user_id, exc,
+        )
+
+
+async def _trigger_sov_calculation(
+    *,
+    settings: Settings,
+    product_id: str,
+    snapshot_id: str,
+    engines: List[str],
+    debug: bool = False,
+) -> None:
+    """
+    Fire SOV calculation requests for all given engines **concurrently**.
+
+    Each engine gets its own HTTP POST to the SOV microservice.
+    Failures are logged but never crash the main optimization workflow.
+    """
+    sov_url = settings.sov_service_url
+    logger.info(
+        "[SOV Auto-Trigger] Starting SOV for engines=%s, product=%s, snapshot=%s, url=%s",
+        engines, product_id, snapshot_id, sov_url,
+    )
+
+    async def _call_sov(engine: str) -> None:
+        payload = {
+            "product_id": product_id,
+            "engine": engine,
+            "snapshot_id": snapshot_id,
+            "debug": debug,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                resp = await client.post(sov_url, json=payload)
+                if resp.status_code == 200:
+                    logger.info(
+                        "[SOV Auto-Trigger] ✅ Success for engine=%s (status=%d)",
+                        engine, resp.status_code,
+                    )
+                else:
+                    logger.warning(
+                        "[SOV Auto-Trigger] ⚠️ Non-200 for engine=%s (status=%d, body=%s)",
+                        engine, resp.status_code, resp.text[:300],
+                    )
+        except Exception as exc:
+            logger.error(
+                "[SOV Auto-Trigger] ❌ Failed for engine=%s: %s",
+                engine, exc,
+            )
+
+    # Fire all engines at the same time
+    await asyncio.gather(*[_call_sov(engine) for engine in engines], return_exceptions=True)
+
+    logger.info("[SOV Auto-Trigger] Completed for all engines: %s", engines)
 
 async def verify_and_deduct_credits(
     settings: Settings,
@@ -1080,36 +1233,19 @@ async def _run_and_increment(
     """
     result = await coro
 
-    # Only increment on success, and enforce strict upper bound
+    # Only increment on success — uses atomic DB-level RPC
     if snapshot_id and result.get("success"):
         try:
             supabase = get_supabase_client(settings)
-            # Atomic increment: read current value, add 1 (if < total)
-            rows = await async_supabase_select(
-                supabase, "analysis_snapshots", {"id": snapshot_id},
+            await async_supabase_rpc(
+                supabase,
+                "increment_snapshot_progress",
+                {"snapshot_id": snapshot_id},
             )
-            if rows:
-                snap = rows[0]
-                current = snap.get("no_of_query", 0) or 0
-                total = snap.get("total_no_of_query", 0) or 0
-
-                if current < total:
-                    new_val = current + 1
-                    await async_supabase_update(
-                        supabase, "analysis_snapshots",
-                        {"no_of_query": new_val},
-                        {"id": snapshot_id},
-                    )
-                    logger.info(
-                        "[Snapshot] Incremented no_of_query (%d/%d) for snapshot %s",
-                        new_val, total, snapshot_id,
-                    )
-                else:
-                    logger.warning(
-                        "[Snapshot] Skipping increment for %s: limit reached (%d/%d)",
-                        snapshot_id, current, total,
-                    )
-
+            logger.info(
+                "[Snapshot] Atomically incremented no_of_query for snapshot %s",
+                snapshot_id,
+            )
         except Exception as exc:
             logger.warning(
                 "[Snapshot] Failed to increment no_of_query for %s: %s",

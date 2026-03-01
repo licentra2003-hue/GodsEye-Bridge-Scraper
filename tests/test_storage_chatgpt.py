@@ -41,8 +41,8 @@ def test_store_chatgpt_analysis_result(mock_supabase):
     # Verify exact insertion data
     mock_table.insert.assert_called_once_with({
         "product_id": "test-product-id",
-        "search_query": "test query",
-        "chatgpt_analysis": {"some": "analysis"},
+        "optimization_prompt": "test query",
+        "optimization_analysis": {"some": "analysis"},
         "citations": [{"link": "url"}],
         "raw_serp_results": {"raw": "data"},
         "snapshot_id": "test-snapshot-id",

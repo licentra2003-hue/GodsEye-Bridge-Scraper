@@ -1,0 +1,120 @@
+# Backend Implementation Guide: Automating SOV Analysis
+
+## Objective
+Currently, users must manually click "Start SOV Analysis" on the frontend after their search query analysis completes. The goal is to **automate this process within the Python Backend** so that the Share of Voice (SOV) calculations are triggered immediately after the search analysis (scraping and LLM processing) finishes successfully. 
+
+Because the frontend already listens for real-time Database changes via Supabase (`useSovSnapshotListener`), once the backend calculates and saves the new SOV data, the frontend UI will automatically update without any further API calls.
+
+---
+
+## 1. Current Manual Workflow (To Be Deprecated)
+1. The frontend waits for the user to click the "Start SOV Analysis" button for a specific engine (Google, Perplexity, or ChatGPT).
+2. The frontend sends a [POST](file:///c:/Users/santo/OneDrive/Desktop/sunny/GodsEye%20-%20FrontEnd%20with%20Backend%20py/GodsEye%20-%20FrontEnd/godseye/app/api/products/route.ts#87-140) request to the Next.js API bridge.
+3. The Next.js bridge queries the Supabase `analysis_snapshots` table to find the **most recent `snapshot_id`** for the product.
+4. The Next.js bridge forwards the payload to the SOV Python service (`/calculate-sov`):
+   ```json
+   {
+     "product_id": "uuid-...",
+     "engine": "google",
+     "snapshot_id": "uuid-...",
+     "debug": false
+   }
+   ```
+
+## 2. New Automated Workflow (Python Backend)
+Since the Python backend is already orchestrating the search query analysis and creating the `analysis_snapshots`, it has all the necessary context to trigger the SOV calculation immediately upon completion.
+
+### Trigger Point
+The SOV calculation should be triggered **right after** the upstream search analysis is marked as completed. 
+
+In your `main.py` (or optimization orchestration script), look for the logic where you update the `analysis_snapshots` status to `'completed'`.
+
+### Execution Logic
+The backend must determine which engines were used in the current analysis snapshot. If `perplexity_queries` were processed, it should trigger the SOV calculation for `perplexity`. The same applies to `google` and `chatgpt`.
+
+### Step-by-Step Implementation Steps for Backend:
+
+#### Step 2A: Identify Completed Engines
+When the optimization finishes, look at the payload that initiated the job. Create a list of engines that need an SOV update based on whether they had queries processed.
+```python
+engines_to_run = []
+if len(request.google_queries) > 0:
+    engines_to_run.append("google")
+if len(request.perplexity_queries) > 0:
+    engines_to_run.append("perplexity")
+if len(request.chatgpt_queries) > 0:
+    engines_to_run.append("chatgpt")
+```
+
+#### Step 2B: Trigger SOV Calculation asynchronously
+Because SOV calculation can take time and you don't want to block the user's optimization progress API response, you should trigger the SOV calculations as background tasks or asynchronous HTTP requests.
+
+If the `/calculate-sov` endpoint is hosted on the same API (e.g., FastAPI), you can use `BackgroundTasks` to call the internal function directly. If it is a separate microservice, you can make HTTP requests.
+
+**Example using FastAPI BackgroundTasks:**
+```python
+from fastapi import BackgroundTasks
+import httpx
+import asyncio
+
+async def trigger_sov_for_engines(product_id: str, snapshot_id: str, engines: list[str], debug: bool = False):
+    # This runs in the background
+    async with httpx.AsyncClient() as client:
+        # We can run these concurrently using asyncio.gather
+        tasks = []
+        for engine in engines:
+            payload = {
+                "product_id": product_id,
+                "engine": engine,
+                "snapshot_id": snapshot_id,
+                "debug": debug
+            }
+            # Make the HTTP POST to your existing SOV endpoint
+            tasks.append(
+                client.post("http://127.0.0.1:5000/calculate-sov", json=payload, timeout=120.0)
+            )
+        
+        # Execute all SOV calculations concurrently
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Log results for observability
+        for engine, result in zip(engines, results):
+            if isinstance(result, Exception):
+                print(f"[SOV Auto-Trigger] Failed for {engine}: {result}")
+            else:
+                print(f"[SOV Auto-Trigger] Success for {engine}: {result.status_code}")
+
+# Inside your main optimization route (e.g., POST /api/v1/optimize/start):
+@app.post("/api/v1/optimize/start")
+async def start_optimization(request: OptimizeRequest, background_tasks: BackgroundTasks):
+    # ... existing logic to start analysis ...
+    
+    # After analysis is completed successfully (or enqueued to complete in the background):
+    # 1. Update analysis_snapshots to 'completed'
+    # 2. Trigger SOV
+    
+    engines_to_run = get_engines_used(request)
+    if engines_to_run:
+        background_tasks.add_task(
+            trigger_sov_for_engines,
+            product_id=request.product_id,
+            snapshot_id=snapshot_id, # You generated this for the current run
+            engines=engines_to_run,
+            debug=request.debug
+        )
+        
+    return {"message": "Optimization started, SOV will be triggered automatically.", ...}
+```
+
+## 3. Handling the Architecture (Same App vs Separate Microservice)
+*   **If `/calculate-sov` is in the SAME Python app:** 
+    Instead of making HTTP requests via `httpx`, you can extract the core logic of your `calculate_sov` route into a standard Python `async def` function. Then, directly pass that function into `BackgroundTasks` inside a loop.
+*   **If `/calculate-sov` is a SEPARATE app:**
+    Use the `httpx.AsyncClient` mapping shown above to make standard REST calls. Ensure your network timeout is high enough (`timeout=120.0`) as LLM evaluation takes time.
+
+## 4. Why this works beautifully with the Frontend
+1. The frontend's React components ([SOVPerformanceCard.tsx](file:///c:/Users/santo/OneDrive/Desktop/sunny/GodsEye%20-%20FrontEnd%20with%20Backend%20py/GodsEye%20-%20FrontEnd/godseye/components/SOVPerformanceCard.tsx)) use a custom hook `useSovSnapshotListener`.
+2. This hook maintains an active WebSocket connection to Supabase.
+3. When the Python backend finishes calculating the SOV and writes the `.insert()` or `.update()` into the `sov_product_snapshots` table in Supabase, the Supabase real-time system instantly pushes an event to the frontend.
+4. The frontend detects the change and automatically refreshes its data using [fetchSOVData()](file:///c:/Users/santo/OneDrive/Desktop/sunny/GodsEye%20-%20FrontEnd%20with%20Backend%20py/GodsEye%20-%20FrontEnd/godseye/components/SOVPerformanceCard.tsx#155-200).
+5. **Result:** The user watches the query progress bar reach 100%, and seconds later, the SOV performance cards appear and animate with new data automatically, providing a magical, seamless experience.

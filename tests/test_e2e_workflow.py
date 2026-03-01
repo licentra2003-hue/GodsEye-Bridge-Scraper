@@ -90,6 +90,14 @@ class FakeSnapshotStore:
         if snapshot_id in self._snapshots:
             self._snapshots[snapshot_id].update(data)
 
+    def increment(self, snapshot_id: str) -> None:
+        if snapshot_id in self._snapshots:
+            snap = self._snapshots[snapshot_id]
+            current = snap.get("no_of_query", 0) or 0
+            total = snap.get("total_no_of_query", 0) or 0
+            if current < total:
+                snap["no_of_query"] = current + 1
+
     def get(self, snapshot_id: str) -> Dict[str, Any]:
         return self._snapshots.get(snapshot_id, {})
 
@@ -182,6 +190,18 @@ def _make_mock_supabase_update(store: FakeSnapshotStore):
     return _update
 
 
+def _make_mock_supabase_rpc(store: FakeSnapshotStore):
+    async def _rpc(client, function_name, params):
+        if function_name == "increment_snapshot_progress":
+            sid = params.get("snapshot_id")
+            if sid:
+                store.increment(sid)
+        class _Resp:
+            data = None
+        return _Resp()
+    return _rpc
+
+
 # ========================================================================
 # Patch targets
 # ========================================================================
@@ -199,6 +219,7 @@ _P_SVC_STORE = "app.services.analysis_service.store_analysis_result"
 _P_SVC_REFUND = "app.services.analysis_service.refund_credits"
 _P_SVC_SELECT = "app.services.analysis_service.async_supabase_select"
 _P_SVC_DB_UPDATE = "app.services.analysis_service.async_supabase_update"
+_P_SVC_RPC = "app.services.analysis_service.async_supabase_rpc"
 
 BASE_URL = "http://testserver"
 
@@ -242,6 +263,7 @@ class TestEndToEndWorkflow:
             patch(_P_SVC_REFUND, new=AsyncMock(return_value=True)),
             patch(_P_SVC_SELECT, new=_make_mock_supabase_select(store)),
             patch(_P_SVC_DB_UPDATE, new=_make_mock_supabase_update(store)),
+            patch(_P_SVC_RPC, new=_make_mock_supabase_rpc(store)),
         ):
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url=BASE_URL
@@ -303,6 +325,7 @@ class TestEndToEndWorkflow:
             patch(_P_SVC_REFUND, new=AsyncMock(return_value=True)),
             patch(_P_SVC_SELECT, new=_make_mock_supabase_select(store)),
             patch(_P_SVC_DB_UPDATE, new=_make_mock_supabase_update(store)),
+            patch(_P_SVC_RPC, new=_make_mock_supabase_rpc(store)),
         ):
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url=BASE_URL
@@ -387,6 +410,7 @@ class TestEndToEndPartialFailure:
             patch(_P_SVC_REFUND, new=AsyncMock(return_value=True)),
             patch(_P_SVC_SELECT, new=_make_mock_supabase_select(store)),
             patch(_P_SVC_DB_UPDATE, new=_make_mock_supabase_update(store)),
+            patch(_P_SVC_RPC, new=_make_mock_supabase_rpc(store)),
         ):
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url=BASE_URL
@@ -440,6 +464,7 @@ class TestEndToEndMixedPipelines:
             patch(_P_SVC_REFUND, new=AsyncMock(return_value=True)),
             patch(_P_SVC_SELECT, new=_make_mock_supabase_select(store)),
             patch(_P_SVC_DB_UPDATE, new=_make_mock_supabase_update(store)),
+            patch(_P_SVC_RPC, new=_make_mock_supabase_rpc(store)),
         ):
             async with AsyncClient(
                 transport=ASGITransport(app=app), base_url=BASE_URL

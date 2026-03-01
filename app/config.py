@@ -65,6 +65,19 @@ class Settings(BaseModel):
         default_factory=lambda: os.getenv("ENABLE_CHATGPT", "false").lower() == "true"
     )
 
+    # ── SOV Auto-Trigger Switch ───────────────────────────────────────
+    # When true, SOV calculation is triggered automatically after
+    # analysis completes.  The SOV microservice URL is configurable.
+    calculate_sov: bool = Field(
+        default_factory=lambda: os.getenv("CALCULATE_SOV", "false").lower() == "true"
+    )
+    sov_service_url: str = Field(
+        default_factory=lambda: os.getenv(
+            "SOV_SERVICE_URL",
+            "http://127.0.0.1:5000/calculate-sov",
+        )
+    )
+
     # ── Scraper URLs (all 3 endpoints) ────────────────────────────────
     scraper_url_perplexity: str = Field(
         default_factory=lambda: os.getenv(
