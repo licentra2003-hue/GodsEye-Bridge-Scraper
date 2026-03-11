@@ -13,7 +13,7 @@ import httpx
 from google import genai
 from google.genai import types
 from supabase import Client, create_client
-from tenacity import Retrying, before_sleep_log, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import AsyncRetrying, Retrying, before_sleep_log, retry_if_exception_type, stop_after_attempt, wait_exponential, retry_if_result
 
 from app.config import Settings
 from app.models import PipelineId, StrategicAnalysisRequest
@@ -404,47 +404,81 @@ async def _trigger_sov_calculation(
     debug: bool = False,
 ) -> None:
     """
-    Fire SOV calculation requests for all given engines **concurrently**.
-
-    Each engine gets its own HTTP POST to the SOV microservice.
-    Failures are logged but never crash the main optimization workflow.
+    Fire SOV calculation requests for all given engines.
+    
+    Cold-Start Aware:
+    1. First, try many times (with backoff) to wake up the service with ONE 'scout' engine.
+    2. Once the scout succeeds (or exhausts retries), fire the rest concurrently.
     """
+    if not engines:
+        return
+
     sov_url = settings.sov_service_url
     logger.info(
-        "[SOV Auto-Trigger] Starting SOV for engines=%s, product=%s, snapshot=%s, url=%s",
+        "[SOV Auto-Trigger] Initiating SOV for engines=%s, product=%s, snapshot=%s, url=%s",
         engines, product_id, snapshot_id, sov_url,
     )
 
-    async def _call_sov(engine: str) -> None:
+    # 1. Define the retry policy for cold starts (Total ~60-90s capacity)
+    retrier = AsyncRetrying(
+        stop=stop_after_attempt(10),
+        wait=wait_exponential(multiplier=2, min=3, max=15),
+        retry=(
+            retry_if_exception_type((httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout))
+            | retry_if_result(lambda r: isinstance(r, httpx.Response) and r.status_code in (502, 503, 504))
+        ),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+        reraise=False, # We want to handle results manually
+    )
+
+    async def _safe_post(engine: str, is_scout: bool = False) -> Optional[httpx.Response]:
         payload = {
             "product_id": product_id,
             "engine": engine,
             "snapshot_id": snapshot_id,
             "debug": debug,
         }
-        try:
+        
+        prefix = "[SOV Scout]" if is_scout else "[SOV Parallel]"
+        
+        async def _attempt_post():
             async with httpx.AsyncClient(timeout=120.0) as client:
-                resp = await client.post(sov_url, json=payload)
-                if resp.status_code == 200:
-                    logger.info(
-                        "[SOV Auto-Trigger] ✅ Success for engine=%s (status=%d)",
-                        engine, resp.status_code,
-                    )
-                else:
-                    logger.warning(
-                        "[SOV Auto-Trigger] ⚠️ Non-200 for engine=%s (status=%d, body=%s)",
-                        engine, resp.status_code, resp.text[:300],
-                    )
+                return await client.post(sov_url, json=payload)
+
+        try:
+            if is_scout:
+                # Use retrier only for the scout to wake up the sleeper
+                response = await retrier(_attempt_post)
+            else:
+                # Direct call for parallel engines (service should be awake now)
+                response = await _attempt_post()
+                
+            if response and response.status_code == 200:
+                logger.info("%s ✅ Success for engine=%s", prefix, engine)
+            elif response:
+                logger.warning("%s ⚠️ Failed for engine=%s (status=%d, text=%s)", prefix, engine, response.status_code, response.text[:200])
+            else:
+                logger.error("%s ❌ No response received for engine=%s", prefix, engine)
+            return response
         except Exception as exc:
-            logger.error(
-                "[SOV Auto-Trigger] ❌ Failed for engine=%s: %s",
-                engine, exc,
-            )
+            logger.error("%s ❌ Exception for engine=%s: %s", prefix, engine, exc)
+            return None
 
-    # Fire all engines at the same time
-    await asyncio.gather(*[_call_sov(engine) for engine in engines], return_exceptions=True)
+    # Step 1: Send the Scout
+    # If the service is asleep, Railway proxy returns 502 while booting.
+    # The scout will wait for the boot to finish.
+    scout_engine = engines[0]
+    remaining_engines = engines[1:]
 
-    logger.info("[SOV Auto-Trigger] Completed for all engines: %s", engines)
+    logger.info("[SOV Auto-Trigger] Sending scout engine (%s) to handle potential cold start...", scout_engine)
+    await _safe_post(scout_engine, is_scout=True)
+
+    # Step 2: Fire remaining engines in parallel
+    if remaining_engines:
+        logger.info("[SOV Auto-Trigger] Firing remaining engines concurrently: %s", remaining_engines)
+        await asyncio.gather(*[_safe_post(e) for e in remaining_engines], return_exceptions=True)
+
+    logger.info("[SOV Auto-Trigger] Completed all triggers for: %s", engines)
 
 async def verify_and_deduct_credits(
     settings: Settings,

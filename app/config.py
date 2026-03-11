@@ -74,7 +74,7 @@ class Settings(BaseModel):
     sov_service_url: str = Field(
         default_factory=lambda: os.getenv(
             "SOV_SERVICE_URL",
-            "http://127.0.0.1:5000/calculate-sov",
+            "http://godseye-sov-2-production.up.railway.app/calculate-sov",
         )
     )
 

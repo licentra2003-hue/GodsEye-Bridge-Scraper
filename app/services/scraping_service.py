@@ -453,7 +453,29 @@ async def _poll_chatgpt_result(
                 raise ScrapingError(f"ChatGPT job {job_id} failed: {error_msg}")
 
             logger.info("[Scraper:chatgpt] Job completed  job_id=%s", job_id)
-            return data.get("result", data.get("data", data))
+
+            # --- Extract the actual content ---
+            # Priority: data["result"] → data["data"] → data itself (only if it
+            # carries a known content key, NOT just a job-metadata envelope).
+            content = data.get("result", data.get("data"))
+            if content is not None:
+                return content
+
+            # Last resort: use the top-level dict ONLY if it contains actual
+            # scrape content (answer_text, ai_overview_text, response, etc.).
+            # If it only has job-metadata keys we treat it as empty and let
+            # the content-validation in _fetch_chatgpt trigger a retry.
+            CONTENT_KEYS = {"answer_text", "ai_overview_text", "response", "text", "content"}
+            if any(k in data for k in CONTENT_KEYS):
+                return data
+
+            # No usable content — return a failure-shaped dict so retry fires
+            logger.warning(
+                "[Scraper:chatgpt] Job %s completed but response contains no content keys. "
+                "Raw keys: %s",
+                job_id, list(data.keys()),
+            )
+            return {"success": False, "error_message": "ChatGPT job completed but returned no content"}
 
         # Still processing — wait then retry
         await asyncio.sleep(poll_interval)
@@ -468,7 +490,7 @@ async def _fetch_chatgpt(
 ) -> Dict[str, Any]:
     """Submit → poll flow for ChatGPT scraper."""
     job_id = await _submit_chatgpt_job(client, scrape_url, query, api_key)
-    return await _poll_chatgpt_result(
+    result = await _poll_chatgpt_result(
         client,
         scrape_url,
         job_id,
@@ -476,6 +498,33 @@ async def _fetch_chatgpt(
         poll_interval=settings.scraper_poll_initial_interval,
         max_attempts=settings.scraper_poll_max_attempts,
     )
+
+    # --- Content validation (mirrors Perplexity and Google patterns) ---
+    # If the result already signals failure, pass it through for retry.
+    if result.get("success") is False:
+        error_msg = result.get("error_message", "Unknown ChatGPT scraper error")
+        logger.warning("[Scraper:chatgpt] Server returned failure: %s", error_msg)
+        return result  # retry_if_result will inspect this
+
+    # Try to find the main text content under several possible field names.
+    # The ChatGPT scraper may use different keys depending on its version.
+    CONTENT_FIELD_CANDIDATES = ["answer_text", "ai_overview_text", "response", "text", "content"]
+    ai_text = ""
+    for field in CONTENT_FIELD_CANDIDATES:
+        candidate = result.get(field, "")
+        if isinstance(candidate, str) and len(candidate) > 1:
+            ai_text = candidate
+            break
+
+    if not ai_text:
+        logger.warning(
+            "[Scraper:chatgpt] Empty or missing content. Available keys: %s",
+            list(result.keys()),
+        )
+        return {**result, "success": False, "error_message": "Empty or insufficient ChatGPT response content"}
+
+    return result
+
 
 
 # ═══════════════════════════════════════════════════════════════════════
