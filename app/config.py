@@ -78,6 +78,14 @@ class Settings(BaseModel):
         )
     )
 
+    # ── LLM Analysis Bypass Switch ────────────────────────────────────
+    # When true, the Gemini analysis step is skipped entirely.
+    # Raw scraped data is stored directly to Supabase with an empty
+    # analysis field ({}). Useful for scrape-only / tracker runs.
+    skip_llm_analysis: bool = Field(
+        default_factory=lambda: os.getenv("SKIP_LLM_ANALYSIS", "false").lower() == "true"
+    )
+
     # ── Scraper URLs (all 3 endpoints) ────────────────────────────────
     scraper_url_perplexity: str = Field(
         default_factory=lambda: os.getenv(
@@ -106,11 +114,30 @@ class Settings(BaseModel):
 
     # Shared scraper settings
     scraper_api_key: str | None = Field(default_factory=lambda: os.getenv("SCRAPER_API_KEY"))
-    scraper_poll_initial_interval: float = Field(default_factory=lambda: float(os.getenv("SCRAPER_POLL_INITIAL_INTERVAL", "3.0")))
-    scraper_poll_max_interval: float = Field(default_factory=lambda: float(os.getenv("SCRAPER_POLL_MAX_INTERVAL", "3.0")))
-    scraper_poll_backoff_multiplier: float = Field(default_factory=lambda: float(os.getenv("SCRAPER_POLL_BACKOFF_MULTIPLIER", "1.0")))
-    scraper_poll_max_attempts: int = Field(default_factory=lambda: int(os.getenv("SCRAPER_POLL_MAX_ATTEMPTS", "100")))
-    scraper_request_timeout: float = Field(default_factory=lambda: float(os.getenv("SCRAPER_REQUEST_TIMEOUT", "30.0")))
+    scraper_poll_initial_interval: float = Field(default_factory=lambda: float(os.getenv("SCRAPER_POLL_INITIAL_INTERVAL", "5.0")))
+    scraper_poll_max_interval: float = Field(default_factory=lambda: float(os.getenv("SCRAPER_POLL_MAX_INTERVAL", "10.0")))
+    scraper_poll_backoff_multiplier: float = Field(default_factory=lambda: float(os.getenv("SCRAPER_POLL_BACKOFF_MULTIPLIER", "1.5")))
+    scraper_poll_max_attempts: int = Field(default_factory=lambda: int(os.getenv("SCRAPER_POLL_MAX_ATTEMPTS", "500")))
+    scraper_request_timeout: float = Field(default_factory=lambda: float(os.getenv("SCRAPER_REQUEST_TIMEOUT", "300.0")))
+
+    # ── Per-pipeline concurrency limits ────────────────────────────────
+    # Cap how many scraper requests run simultaneously per pipeline.
+    # Perplexity: browser-based, memory-intensive  → conservative limit
+    # Google / ChatGPT: job-queue based, lighter   → higher limit
+    perplexity_concurrency_limit: int = Field(
+        default_factory=lambda: int(os.getenv("PERPLEXITY_CONCURRENCY_LIMIT", "10"))
+    )
+    google_concurrency_limit: int = Field(
+        default_factory=lambda: int(os.getenv("GOOGLE_CONCURRENCY_LIMIT", "20"))
+    )
+
+    # ── Webhook / Callback settings ────────────────────────────────────
+    # Used by the high-scale Perplexity gateway to send results back.
+    # Must be a public URL (e.g. ngrok or production domain).
+    callback_base_url: str = Field(
+        default_factory=lambda: os.getenv("CALLBACK_BASE_URL", "http://localhost:3001").rstrip("/")
+    )
+
 
     @property
     def scraper_pipelines(self) -> Dict[str, str]:

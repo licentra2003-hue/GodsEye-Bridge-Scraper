@@ -1,0 +1,2 @@
+Retrying app.services.scraping_service.fetch_ai_search_data.<locals>._execute_with_retry.<locals>._call in 1.0 seconds as it raised ScrapingTimeoutError: Timed out waiting for perplexity callback (job_id=c4607849-d827-4458-81fb-5abbb539a3ce).
+Retrying app.services.scraping_service.fetch_ai_search_data.<locals>._execute_with_retry.<locals>._call in 2.0 seconds as it raised ScrapingTimeoutError: Timed out waiting for perplexity callback (job_id=bfbd5610-266d-44a0-82b3-4283d95c3569).

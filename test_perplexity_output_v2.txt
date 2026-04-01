@@ -1,0 +1,18 @@
+--- Gateway Test (v2) ---
+URL: https://gateway-production-957e.up.railway.app/api/v1/scrape
+Job ID: 630f8b28-33a6-492c-8090-9f4fcb9e5f10
+Query: What are the core features of the GodsEye AI optimization platform?
+Callback URL: https://example.com/callback
+-------------------------
+
+[Action] Sending POST request with job_id and callback_url...
+[Status] Status Code: 202
+
+[Response] Status Content:
+{
+  "job_id": "630f8b28-33a6-492c-8090-9f4fcb9e5f10",
+  "status": "queued",
+  "message": "Job accepted and queued for processing"
+}
+
+[ERROR] Gateway rejected request: {'job_id': '630f8b28-33a6-492c-8090-9f4fcb9e5f10', 'status': 'queued', 'message': 'Job accepted and queued for processing'}

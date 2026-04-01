@@ -1,0 +1,8 @@
+C:\Users\santo\AppData\Local\Programs\Python\Python311\Lib\site-packages\requests\__init__.py:109: RequestsDependencyWarning: urllib3 (1.26.16) or chardet (7.1.0)/charset_normalizer (3.1.0) doesn't match a supported version!
+  warnings.warn(
+INFO:     Started server process [6684]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:3001 (Press CTRL+C to quit)
+2026-03-31 12:47:06,211 INFO [root] Received Perplexity callback for job_id: bfbd5610-266d-44a0-82b3-4283d95c3569
+INFO:     208.77.246.66:0 - "POST /api/v1/callbacks/perplexity HTTP/1.1" 200 OK

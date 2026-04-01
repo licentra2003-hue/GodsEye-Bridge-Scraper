@@ -1,0 +1,42 @@
+--- Gateway Test (v2) ---
+URL: https://gateway-production-957e.up.railway.app/api/v1/scrape
+Job ID: 75cbf877-b24b-4536-8b51-d729940e3bf2
+Query: What are the core features of the GodsEye AI optimization platform?
+Callback URL: https://example.com/callback
+-------------------------
+
+[Action] Sending POST request with job_id and callback_url...
+[Status] Status Code: 202
+
+[Response] Status Content:
+{
+  "job_id": "75cbf877-b24b-4536-8b51-d729940e3bf2",
+  "status": "queued",
+  "message": "Job accepted and queued for processing"
+}
+
+[Success] Scraper job accepted by gateway.
+
+[Action] Polling for result at: https://gateway-production-957e.up.railway.app/api/job-result/75cbf877-b24b-4536-8b51-d729940e3bf2
+Attempt 1: HTTP 500
+Attempt 2: HTTP 500
+Attempt 3: HTTP 500
+Attempt 4: HTTP 500
+Attempt 5: HTTP 500
+Attempt 6: HTTP 500
+Attempt 7: HTTP 500
+Attempt 8: HTTP 500
+Attempt 9: HTTP 500
+Attempt 10: HTTP 500
+Attempt 11: HTTP 500
+Attempt 12: HTTP 500
+Attempt 13: HTTP 500
+Attempt 14: HTTP 500
+Attempt 15: HTTP 500
+Attempt 16: HTTP 500
+Attempt 17: HTTP 500
+Attempt 18: HTTP 500
+Attempt 19: HTTP 500
+Attempt 20: HTTP 500
+
+[TIMEOUT] Still pending after 20 attempts.

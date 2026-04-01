@@ -257,6 +257,31 @@ def auto_balance_json_endpoint(payload: JsonTextRequest) -> Dict[str, str]:
     return {"balanced_text": auto_balance_json(payload.text)}
 
 
-@app.post("/api/v1/utils/fallback-result", tags=["utils"])
-def fallback_result_endpoint(payload: FallbackRequest) -> Dict[str, Any]:
-    return {"analysis": create_fallback_result(payload.text, payload.ai_search_json)}
+# -----------------------------------------------------------------------
+# Webhook / Callback endpoints for high-scale scrapers
+# -----------------------------------------------------------------------
+
+@app.post("/api/v1/callbacks/perplexity", tags=["callbacks"])
+async def perplexity_callback(payload: Dict[str, Any]) -> Dict[str, bool]:
+    """
+    Webhook receiver for the high-scale Perplexity scraper.
+    
+    The worker posts the result here when STORAGE_MODE_API=true.
+    We match the job_id and resolve the waiting future.
+    """
+    job_id = payload.get("job_id")
+    if not job_id:
+        logging.warning("Received Perplexity callback without job_id")
+        return {"success": False}
+
+    logging.info("Received Perplexity callback for job_id: %s", job_id)
+    
+    from app.services.scraping_service import perplexity_job_tracker
+    perplexity_job_tracker.complete(job_id, payload)
+    
+    return {"success": True}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=3001)

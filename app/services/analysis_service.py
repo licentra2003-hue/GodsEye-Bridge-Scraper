@@ -1159,10 +1159,17 @@ async def process_single_query_pipeline(
     debug: bool = False,
 ) -> Dict[str, Any]:
     """
-    Full async pipeline for a single query:
+    Full async pipeline for a single query.
+
+    Normal mode (SKIP_LLM_ANALYSIS=false):
       1. Scrape AI search data (async)
       2. Run Gemini strategic analysis (sync → ``to_thread``)
       3. Store the result in Supabase (sync → ``to_thread``)
+
+    Scrape-only mode (SKIP_LLM_ANALYSIS=true):
+      1. Scrape AI search data (async)
+      2. *** Gemini step is SKIPPED ***
+      3. Store raw scraped data directly with analysis_result={} (sync → ``to_thread``)
 
     Args:
         product_id: UUID of the product being analysed.
@@ -1170,7 +1177,7 @@ async def process_single_query_pipeline(
         pipeline: Pipeline id (``"perplexity"`` or ``"google_overview"``).
         snapshot_id: Optional snapshot id to group analyses.
         settings: Application settings.
-        client_product_json: Product data for Gemini analysis.
+        client_product_json: Product data for Gemini analysis (unused in scrape-only mode).
         api_key: Optional Gemini API key override.
         debug: Enable debug logging/files.
 
@@ -1181,11 +1188,11 @@ async def process_single_query_pipeline(
 
     try:
         logger.info(
-            "[Pipeline] Starting  pipeline=%s  query=%r  product_id=%s",
-            pipeline, query, product_id,
+            "[Pipeline] Starting  pipeline=%s  query=%r  product_id=%s  skip_llm=%s",
+            pipeline, query, product_id, settings.skip_llm_analysis,
         )
 
-        # Step 1 — Scrape (fully async)
+        # Step 1 — Scrape (fully async) — always runs regardless of mode
         scraped_data = await fetch_ai_search_data(
             pipeline=pipeline,
             query=query,
@@ -1193,6 +1200,49 @@ async def process_single_query_pipeline(
         )
         logger.info("[Pipeline] Scraping complete  pipeline=%s  query=%r", pipeline, query)
 
+        # ── Shared: extract source_links from scraped data ──────────────
+        normalized = normalize_ai_search(scraped_data)
+        source_links: List[Any] = []
+        if isinstance(normalized, list):
+            source_links = flatten_source_links(normalized)
+        elif isinstance(normalized, dict):
+            source_links = normalized.get("source_links", [])
+
+        # ── Branch: SKIP_LLM_ANALYSIS mode ──────────────────────────────
+        if settings.skip_llm_analysis:
+            logger.info(
+                "[Pipeline] LLM analysis SKIPPED (SKIP_LLM_ANALYSIS=true)  pipeline=%s  query=%r",
+                pipeline, query,
+            )
+
+            # Step 3 (direct) — Store raw scraper data with empty analysis
+            stored_record = await asyncio.to_thread(
+                store_analysis_result,
+                settings=settings,
+                product_id=product_id,
+                pipeline=pipeline,
+                search_query=query,
+                analysis_result={},          # No Gemini output — intentionally empty
+                raw_serp_results=scraped_data,
+                snapshot_id=snapshot_id,
+                source_links=source_links,
+                debug=debug,
+            )
+            logger.info("[Pipeline] Stored (scrape-only)  pipeline=%s  query=%r", pipeline, query)
+
+            # Determine success from the scraper's own response field
+            scrape_success = scraped_data.get("success", True) if isinstance(scraped_data, dict) else True
+
+            return {
+                "success": scrape_success,
+                "analysis": {},
+                "stored_record": stored_record,
+                "product_id": product_id,
+                "pipeline": pipeline,
+                "search_query": query,
+            }
+
+        # ── Normal mode: Gemini analysis ────────────────────────────────
         # Step 2 — Gemini analysis (sync SDK → run in thread pool)
         request = StrategicAnalysisRequest(
             aiSearchJson=scraped_data,
@@ -1216,12 +1266,6 @@ async def process_single_query_pipeline(
 
         # Step 3 — Store to Supabase (sync client → run in thread pool)
         analysis_data = analysis_result.get("analysis", {})
-        normalized = normalize_ai_search(scraped_data)
-        source_links: List[Any] = []
-        if isinstance(normalized, list):
-            source_links = flatten_source_links(normalized)
-        elif isinstance(normalized, dict):
-            source_links = normalized.get("source_links", [])
 
         stored_record = await asyncio.to_thread(
             store_analysis_result,
@@ -1256,24 +1300,35 @@ async def process_single_query_pipeline(
         }
 
 
+
 async def _run_and_increment(
     coro,
     snapshot_id: Optional[str],
     settings: Settings,
 ) -> Dict[str, Any]:
     """
-    Await a single query coroutine, then increment ``no_of_query``
+    Await a single query coroutine, then atomically increment ``no_of_query``
     in the snapshot so progress is visible in real-time.
+
+    Uses the ``increment_snapshot_query_count`` Supabase RPC function which
+    executes a single atomic SQL UPDATE:
+        UPDATE analysis_snapshots
+        SET no_of_query = LEAST(no_of_query + 1, total_no_of_query)
+        WHERE id = snapshot_id
+
+    This prevents the read-modify-write race condition that occurs when
+    100 concurrent tasks all read the same value and write the same +1.
+    The LEAST() guard ensures the counter never exceeds total_no_of_query.
     """
     result = await coro
 
-    # Only increment on success — uses atomic DB-level RPC
+    # Only increment on success — non-successful queries do not count as progress
     if snapshot_id and result.get("success"):
         try:
             supabase = get_supabase_client(settings)
             await async_supabase_rpc(
                 supabase,
-                "increment_snapshot_progress",
+                "increment_snapshot_query_count",
                 {"snapshot_id": snapshot_id},
             )
             logger.info(
@@ -1301,18 +1356,24 @@ async def run_optimization_batch(
     debug: bool = False,
 ) -> List[Dict[str, Any]]:
     """
-    Fan out all requested queries across both pipelines concurrently.
+    Fan out all requested queries across all pipelines concurrently,
+    with per-pipeline semaphores to cap simultaneous scraper requests.
 
-    Uses ``asyncio.gather`` so that *N* queries run in parallel.
-    After each individual query completes, ``no_of_query`` is incremented
-    in the snapshot so the frontend can show real-time progress.
+    Uses ``asyncio.gather`` so that *N* tasks are queued immediately, but
+    the semaphores ensure only a controlled number actually execute at once:
+      - Perplexity: browser-based, memory-intensive → PERPLEXITY_CONCURRENCY_LIMIT (default 10)
+      - Google / ChatGPT: job-queue based, lighter  → GOOGLE_CONCURRENCY_LIMIT (default 20)
+
+    After each individual query completes, ``no_of_query`` is atomically
+    incremented in the snapshot so the frontend can show real-time progress.
 
     Args:
         product_id: UUID of the product.
         perplexity_queries: Queries to run through the Perplexity pipeline.
         google_queries: Queries to run through the Google Overview pipeline.
+        chatgpt_queries: Queries to run through the ChatGPT pipeline.
         snapshot_id: Optional snapshot id for progress tracking.
-        settings: Application settings.
+        settings: Application settings (carries concurrency limits).
         client_product_json: Product data for Gemini analysis.
         api_key: Optional Gemini API key override.
         debug: Enable debug logging/files.
@@ -1320,46 +1381,62 @@ async def run_optimization_batch(
     Returns:
         List of result dicts, one per query.
     """
+    # ── Build task list ──────────────────────────────────────────────────
     tasks = []
 
     for query in perplexity_queries:
-        coro = process_single_query_pipeline(
-            product_id=product_id,
-            query=query,
-            pipeline="perplexity",
-            snapshot_id=snapshot_id,
-            settings=settings,
-            client_product_json=client_product_json,
-            api_key=api_key,
-            debug=debug,
+        tasks.append(
+            _run_and_increment(
+                process_single_query_pipeline(
+                    product_id=product_id,
+                    query=query,
+                    pipeline="perplexity",
+                    snapshot_id=snapshot_id,
+                    settings=settings,
+                    client_product_json=client_product_json,
+                    api_key=api_key,
+                    debug=debug,
+                ),
+                snapshot_id,
+                settings,
+            )
         )
-        tasks.append(_run_and_increment(coro, snapshot_id, settings))
 
     for query in google_queries:
-        coro = process_single_query_pipeline(
-            product_id=product_id,
-            query=query,
-            pipeline="google_overview",
-            snapshot_id=snapshot_id,
-            settings=settings,
-            client_product_json=client_product_json,
-            api_key=api_key,
-            debug=debug,
+        tasks.append(
+            _run_and_increment(
+                process_single_query_pipeline(
+                    product_id=product_id,
+                    query=query,
+                    pipeline="google_overview",
+                    snapshot_id=snapshot_id,
+                    settings=settings,
+                    client_product_json=client_product_json,
+                    api_key=api_key,
+                    debug=debug,
+                ),
+                snapshot_id,
+                settings,
+            )
         )
-        tasks.append(_run_and_increment(coro, snapshot_id, settings))
 
     for query in chatgpt_queries:
-        coro = process_single_query_pipeline(
-            product_id=product_id,
-            query=query,
-            pipeline="chatgpt",
-            snapshot_id=snapshot_id,
-            settings=settings,
-            client_product_json=client_product_json,
-            api_key=api_key,
-            debug=debug,
+        tasks.append(
+            _run_and_increment(
+                process_single_query_pipeline(
+                    product_id=product_id,
+                    query=query,
+                    pipeline="chatgpt",
+                    snapshot_id=snapshot_id,
+                    settings=settings,
+                    client_product_json=client_product_json,
+                    api_key=api_key,
+                    debug=debug,
+                ),
+                snapshot_id,
+                settings,
+            )
         )
-        tasks.append(_run_and_increment(coro, snapshot_id, settings))
 
     logger.info(
         "[Batch] Dispatching %d tasks  (perplexity=%d, google=%d, chatgpt=%d)  product_id=%s",
@@ -1381,3 +1458,4 @@ async def run_optimization_batch(
     )
 
     return results  # type: ignore[return-value]
+

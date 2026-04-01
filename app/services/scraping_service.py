@@ -46,6 +46,74 @@ from app.config import Settings
 logger = logging.getLogger(__name__)
 
 
+# ═══════════════════════════════════════════════════════════════════════
+# Callback / Webhook Job Tracker
+# ═══════════════════════════════════════════════════════════════════════
+
+class ScraperJobTracker:
+    """
+    Registry for pending scraper jobs that wait for a webhook callback.
+    
+    When a job is submitted to a high-scale scraper with STORAGE_MODE_API=true,
+    the worker sends results back via POST to a callback URL.
+    This tracker allows the initiating coroutine to await an asyncio.Future
+    which is resolved by the webhook endpoint.
+    """
+    def __init__(self):
+        self._jobs: Dict[str, asyncio.Future] = {}
+
+    def register(self, job_id: str) -> asyncio.Future:
+        """Create and track a future for a specific job_id."""
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        self._jobs[job_id] = fut
+        return fut
+
+    def complete(self, job_id: str, result: Dict[str, Any]):
+        """Resolve the future with the incoming payload."""
+        if job_id in self._jobs:
+            fut = self._jobs[job_id]
+            if not fut.done():
+                fut.set_result(result)
+            del self._jobs[job_id]
+
+    def fail(self, job_id: str, error_msg: str):
+        """Fail the future with an exception."""
+        if job_id in self._jobs:
+            fut = self._jobs[job_id]
+            if not fut.done():
+                from .scraping_service import ScrapingError
+                fut.set_exception(ScrapingError(error_msg))
+            del self._jobs[job_id]
+
+
+# Global singleton tracker instance
+perplexity_job_tracker = ScraperJobTracker()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Concurrency Control (Global Semaphores)
+# ═══════════════════════════════════════════════════════════════════════
+
+# These semaphores ensure that the total number of concurrent requests 
+# to each scraper engine is capped GLOBALLY across all users.
+_PERPLEXITY_SEMAPHORE: Optional[asyncio.Semaphore] = None
+_GOOGLE_SEMAPHORE: Optional[asyncio.Semaphore] = None
+
+def _get_perplexity_semaphore(settings: Settings) -> asyncio.Semaphore:
+    global _PERPLEXITY_SEMAPHORE
+    if _PERPLEXITY_SEMAPHORE is None:
+        _PERPLEXITY_SEMAPHORE = asyncio.Semaphore(settings.perplexity_concurrency_limit)
+    return _PERPLEXITY_SEMAPHORE
+
+def _get_google_semaphore(settings: Settings) -> asyncio.Semaphore:
+    global _GOOGLE_SEMAPHORE
+    if _GOOGLE_SEMAPHORE is None:
+        _GOOGLE_SEMAPHORE = asyncio.Semaphore(settings.google_concurrency_limit)
+    return _GOOGLE_SEMAPHORE
+
+
+
 def should_retry_scraping_result(result: Any) -> bool:
     """
     Retry if the scraper result explicitly indicates failure.
@@ -109,10 +177,13 @@ async def _fetch_perplexity(
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Perplexity scraper returns results directly in the response.
-
-    POST ``{query, location, keep_open}`` → ``{ai_overview_text, ...}``
+    Perplexity scraper handler. 
+    
+    Supports two modes:
+    1. Direct (Legacy): returns results in PST response.
+    2. Gateway (New): returns 202 Accepted, requires polling.
     """
+    import uuid
     headers: Dict[str, str] = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -120,8 +191,51 @@ async def _fetch_perplexity(
     # Add browser-like User-Agent to avoid blocking
     headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-    logger.info("[Scraper:perplexity] POST %s  query=%r", scrape_url, query)
+    # If the URL structure suggests the new gateway/job-polling system
+    if "/api/v1/scrape" in scrape_url:
+        job_id = str(uuid.uuid4())
+        callback_url = f"{settings.callback_base_url}/api/v1/callbacks/perplexity"
+        
+        logger.info("[Scraper:perplexity] Using gateway callback flow  job_id=%s  callback_url=%s", job_id, callback_url)
+        
+        # 1. Register the job in our local tracker
+        result_future = perplexity_job_tracker.register(job_id)
+        
+        try:
+            # 2. Submit Job
+            response = await client.post(
+                scrape_url,
+                json={
+                    "job_id": job_id,
+                    "query": query,
+                    "callback_url": callback_url,
+                },
+                headers=headers,
+            )
+            # Accept 200, 201, or 202
+            if response.status_code not in [200, 201, 202]:
+                response.raise_for_status()
 
+            # 3. Wait for the webhook to push data back to us
+            logger.info("[Scraper:perplexity] Job queued. Waiting for callback... job_id=%s", job_id)
+            
+            # Use a timeout slightly longer than the scraper's max attempts would be,
+            # or just rely on the request timeout.
+            try:
+                # We wait for the future to be resolved by the webhook endpoint in main.py
+                return await asyncio.wait_for(result_future, timeout=settings.scraper_request_timeout)
+            except asyncio.TimeoutError:
+                perplexity_job_tracker.fail(job_id, "Timed out waiting for scraper callback")
+                raise ScrapingTimeoutError(f"Timed out waiting for perplexity callback (job_id={job_id})")
+
+        except Exception:
+            # Clean up if submission fails
+            if job_id in perplexity_job_tracker._jobs:
+                del perplexity_job_tracker._jobs[job_id]
+            raise
+
+    # LEGACY: Direct response mode
+    logger.info("[Scraper:perplexity] Direct mode POST %s  query=%r", scrape_url, query)
     response = await client.post(
         scrape_url,
         json={
@@ -133,19 +247,13 @@ async def _fetch_perplexity(
     response.raise_for_status()
 
     data = response.json()
-
-    # Validate response format first (before calling .get())
     if not data or not isinstance(data, dict):
         raise ScrapingError("Invalid Perplexity scraper response format")
 
-    logger.info("[Scraper:perplexity] Direct response received  success=%s", data.get("success"))
-
-    # Check for application-level failure (bot detection, empty content, etc.)
-    # Return as-is so should_retry_scraping_result() can trigger a retry.
     if data.get("success") is False:
         error_msg = data.get("error_message", "Unknown scraper error")
         logger.warning("[Scraper:perplexity] Server returned failure: %s", error_msg)
-        return data  # retry_if_result will inspect this
+        return data
 
     ai_text = data.get("ai_overview_text", "")
     if not ai_text or len(ai_text) <= 1:
@@ -259,6 +367,8 @@ async def _poll_job_result(
     *,
     api_key: Optional[str] = None,
     poll_interval: float = 3.0,
+    max_interval: float = 3.0,
+    backoff_multiplier: float = 1.0,
     max_attempts: int = 100,
 ) -> Dict[str, Any]:
     """
@@ -270,8 +380,10 @@ async def _poll_job_result(
 
         config.scraperEndpoint.replace('/api/v1/scrape', '/api/job-result')
 
-    Polls every ``poll_interval`` seconds (default 3s, matching frontend).
+    Polls every ``poll_interval`` seconds (starts at scraper_poll_initial_interval, 
+    matching frontend).
     Max ``max_attempts`` attempts (default 100 = 5 minutes).
+    Uses exponential backoff: current_interval = min(current_interval * multiplier, max_interval).
 
     Returns the result payload on success.
     """
@@ -292,6 +404,7 @@ async def _poll_job_result(
         headers["Authorization"] = f"Bearer {api_key}"
 
     attempt = 0
+    current_interval = poll_interval
 
     while True:
         attempt += 1
@@ -302,7 +415,7 @@ async def _poll_job_result(
 
         logger.debug(
             "[Scraper:new_ai_mode] poll attempt=%d/%d  interval=%.1fs  job_id=%s",
-            attempt, max_attempts, poll_interval, job_id,
+            attempt, max_attempts, current_interval, job_id,
         )
 
         response = await client.get(poll_url, headers=headers)
@@ -320,19 +433,25 @@ async def _poll_job_result(
         )
 
         if is_completed or is_failed or has_data:
-            if is_failed or (has_data and data["data"].get("success") is False):
-                error_msg = (
-                    data.get("error_message") or
-                    (data.get("data", {}).get("error_message") if isinstance(data.get("data"), dict) else None) or
-                    "Job failed to complete"
-                )
-                raise ScrapingError(f"New AI Mode job {job_id} failed: {error_msg}")
+            # If the backend returns success: false explicitly, gracefully return it.
+            # This triggers our `tenacity` retry, and if all retries fail, it passes the clean error object
+            # upwards so the pipeline doesn't crash.
+            if has_data and data["data"].get("success") is False:
+                error_msg = data["data"].get("error_message", "Job failed to complete")
+                logger.warning("[Scraper:new_ai_mode] Job returned success=false: %s", error_msg)
+                return data["data"]
+
+            if is_failed:
+                error_msg = data.get("error_message", "Job failed to complete")
+                logger.warning("[Scraper:new_ai_mode] Job status is failed: %s", error_msg)
+                return {"success": False, "error_message": error_msg}
 
             logger.info("[Scraper:new_ai_mode] Job completed  job_id=%s", job_id)
             return data.get("result", data.get("data", data))
 
-        # Still processing — wait then retry (fixed interval, matching frontend)
-        await asyncio.sleep(poll_interval)
+        # Still processing — wait then retry with exponential backoff
+        await asyncio.sleep(current_interval)
+        current_interval = min(current_interval * backoff_multiplier, max_interval)
 
 
 async def _fetch_new_ai_mode(
@@ -350,6 +469,8 @@ async def _fetch_new_ai_mode(
         job_id,
         api_key=api_key,
         poll_interval=settings.scraper_poll_initial_interval,
+        max_interval=settings.scraper_poll_max_interval,
+        backoff_multiplier=settings.scraper_poll_backoff_multiplier,
         max_attempts=settings.scraper_poll_max_attempts,
     )
 
@@ -400,6 +521,8 @@ async def _poll_chatgpt_result(
     *,
     api_key: Optional[str] = None,
     poll_interval: float = 3.0,
+    max_interval: float = 3.0,
+    backoff_multiplier: float = 1.0,
     max_attempts: int = 100,
 ) -> Dict[str, Any]:
     """Poll the ChatGPT result until completed."""
@@ -418,6 +541,7 @@ async def _poll_chatgpt_result(
         headers["Authorization"] = f"Bearer {api_key}"
 
     attempt = 0
+    current_interval = poll_interval
     while True:
         attempt += 1
         if attempt > max_attempts:
@@ -427,7 +551,7 @@ async def _poll_chatgpt_result(
 
         logger.debug(
             "[Scraper:chatgpt] poll attempt=%d/%d  interval=%.1fs  job_id=%s",
-            attempt, max_attempts, poll_interval, job_id,
+            attempt, max_attempts, current_interval, job_id,
         )
 
         response = await client.get(poll_url, headers=headers)
@@ -477,8 +601,9 @@ async def _poll_chatgpt_result(
             )
             return {"success": False, "error_message": "ChatGPT job completed but returned no content"}
 
-        # Still processing — wait then retry
-        await asyncio.sleep(poll_interval)
+        # Still processing — wait then retry with exponential backoff
+        await asyncio.sleep(current_interval)
+        current_interval = min(current_interval * backoff_multiplier, max_interval)
 
 
 async def _fetch_chatgpt(
@@ -496,6 +621,8 @@ async def _fetch_chatgpt(
         job_id,
         api_key=api_key,
         poll_interval=settings.scraper_poll_initial_interval,
+        max_interval=settings.scraper_poll_max_interval,
+        backoff_multiplier=settings.scraper_poll_backoff_multiplier,
         max_attempts=settings.scraper_poll_max_attempts,
     )
 
@@ -640,16 +767,25 @@ async def fetch_ai_search_data(
         pipeline, query, settings.retry_max_attempts,
     )
 
+    # Determine which semaphore to use
+    if pipeline == "perplexity":
+        sem = _get_perplexity_semaphore(settings)
+    else:
+        # google_overview, new_ai_mode, and chatgpt all share the google limit
+        sem = _get_google_semaphore(settings)
+
     async def _execute_with_retry(client: httpx.AsyncClient) -> Dict[str, Any]:
         """Execute handler with retry, gracefully handling exhaustion."""
         async def _call() -> Dict[str, Any]:
-            return await handler(
-                client=client,
-                scrape_url=scrape_url,
-                query=query,
-                settings=settings,
-                api_key=api_key,
-            )
+            # Wrap the actual call in the global semaphore to throttle concurrency
+            async with sem:
+                return await handler(
+                    client=client,
+                    scrape_url=scrape_url,
+                    query=query,
+                    settings=settings,
+                    api_key=api_key,
+                )
         try:
             return await retrier(_call)
         except tenacity.RetryError as e:
