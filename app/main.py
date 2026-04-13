@@ -282,6 +282,48 @@ async def perplexity_callback(payload: Dict[str, Any]) -> Dict[str, bool]:
     return {"success": True}
 
 
+@app.post("/api/v1/callbacks/chatgpt", tags=["callbacks"])
+async def chatgpt_callback(payload: Dict[str, Any]) -> Dict[str, bool]:
+    """
+    Webhook receiver for the ChatGPT scraper.
+
+    The scraper POSTs the completed job result here (identified by job_id).
+    We resolve the waiting Future in _fetch_chatgpt so the pipeline can continue.
+    """
+    job_id = payload.get("job_id")
+    if not job_id:
+        logging.warning("[ChatGPT Callback] Received callback without job_id. Keys: %s", list(payload.keys()))
+        return {"success": False}
+
+    logging.info("[ChatGPT Callback] Received result for job_id: %s", job_id)
+
+    from app.services.scraping_service import chatgpt_job_tracker
+    chatgpt_job_tracker.complete(job_id, payload)
+
+    return {"success": True}
+
+
+@app.post("/api/v1/callbacks/new_ai_mode", tags=["callbacks"])
+async def new_ai_mode_callback(payload: Dict[str, Any]) -> Dict[str, bool]:
+    """
+    Webhook receiver for the New AI Mode scraper.
+
+    The scraper POSTs the completed job result here (identified by job_id).
+    We resolve the waiting Future in _fetch_new_ai_mode so the pipeline can continue.
+    """
+    job_id = payload.get("job_id")
+    if not job_id:
+        logging.warning("[New AI Callback] Received callback without job_id. Keys: %s", list(payload.keys()))
+        return {"success": False}
+
+    logging.info("[New AI Callback] Received result for job_id: %s", job_id)
+
+    from app.services.scraping_service import new_ai_job_tracker
+    new_ai_job_tracker.complete(job_id, payload)
+
+    return {"success": True}
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=3001)

@@ -117,8 +117,11 @@ async def create_analysis_snapshot(
             snap_total = snap.get("total_no_of_query", 0) or 0
             snap_status = snap.get("status", "")
 
-            # Simplified logic: reuse if incomplete (completed < total), else create new
-            should_reuse = (completed < snap_total)
+            # ── Expansion/Resume Logic ──
+            # We reuse the snapshot if:
+            # 1. It was incomplete (completed < snap_total) -> Resume
+            # 2. The user has added more queries (completed < total) -> Expansion
+            should_reuse = (completed < total)
 
             if not should_reuse:
                 # ── Scenario 2: existing (completed/full) → create fresh ──
@@ -1199,6 +1202,26 @@ async def process_single_query_pipeline(
             settings=settings,
         )
         logger.info("[Pipeline] Scraping complete  pipeline=%s  query=%r", pipeline, query)
+
+        # ── SCRAPER FAILURE GUARD ─────────────────────────────────────
+        # If the scraper failed (indicated by success=False in the response
+        # dict), we stop here. We don't want to proceed to Gemini analysis 
+        # of an error message, nor do we want to mark this as a "success".
+        if isinstance(scraped_data, dict) and scraped_data.get("success") is False:
+            error_msg = scraped_data.get("error_message", "Scraper failed without error message")
+            logger.error(
+                "[Pipeline] ❌ Scraper failed for pipeline=%s, query=%r: %s",
+                pipeline, query, error_msg
+            )
+            return {
+                "success": False,
+                "error": f"Scraping stage failed: {error_msg}",
+                "analysis": {},
+                "stored_record": None,
+                "product_id": product_id,
+                "pipeline": pipeline,
+                "search_query": query,
+            }
 
         # ── Shared: extract source_links from scraped data ──────────────
         normalized = normalize_ai_search(scraped_data)

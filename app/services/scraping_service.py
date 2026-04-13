@@ -87,8 +87,10 @@ class ScraperJobTracker:
             del self._jobs[job_id]
 
 
-# Global singleton tracker instance
+# Global singleton tracker instances
 perplexity_job_tracker = ScraperJobTracker()
+chatgpt_job_tracker = ScraperJobTracker()
+new_ai_job_tracker = ScraperJobTracker()
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -461,150 +463,71 @@ async def _fetch_new_ai_mode(
     settings: Settings,
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Submit → poll flow for New AI Mode scraper."""
-    job_id = await _submit_new_ai_job(client, scrape_url, query, api_key)
-    return await _poll_job_result(
-        client,
-        scrape_url,
-        job_id,
-        api_key=api_key,
-        poll_interval=settings.scraper_poll_initial_interval,
-        max_interval=settings.scraper_poll_max_interval,
-        backoff_multiplier=settings.scraper_poll_backoff_multiplier,
-        max_attempts=settings.scraper_poll_max_attempts,
+    """
+    New AI Mode scraper handler — Webhook/Callback flow.
+
+    Similar to ChatGPT and Perplexity, this uses a push-based system:
+      1. Generate a job_id and register a Future in new_ai_job_tracker.
+      2. Submit to scraper with callback_url.
+      3. Await the Future.
+    """
+    import uuid
+
+    headers: Dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    job_id = str(uuid.uuid4())
+    callback_url = f"{settings.callback_base_url}/api/v1/callbacks/new_ai_mode"
+
+    logger.info(
+        "[Scraper:new_ai_mode] Submitting job  url=%s  job_id=%s  callback_url=%s  query=%r",
+        scrape_url, job_id, callback_url, query,
     )
+
+    # 1. Register the job in our local tracker
+    result_future = new_ai_job_tracker.register(job_id)
+
+    try:
+        # 2. Submit job to the scraper with our callback URL
+        response = await client.post(
+            scrape_url,
+            json={
+                "job_id": job_id,
+                "query": query,
+                "callback_url": callback_url,
+                "location": "India",
+            },
+            headers=headers,
+        )
+        response.raise_for_status()
+
+        logger.info(
+            "[Scraper:new_ai_mode] Job queued. Waiting for webhook callback... job_id=%s",
+            job_id,
+        )
+
+        # 3. Wait for the scraper to POST the result back
+        try:
+            return await asyncio.wait_for(
+                result_future, timeout=settings.scraper_request_timeout
+            )
+        except asyncio.TimeoutError:
+            new_ai_job_tracker.fail(job_id, "Timed out waiting for New AI Mode scraper callback")
+            raise ScrapingTimeoutError(
+                f"Timed out waiting for New AI Mode callback (job_id={job_id})"
+            )
+
+    except Exception:
+        # Clean up dangling future if submission fails
+        if job_id in new_ai_job_tracker._jobs:
+            del new_ai_job_tracker._jobs[job_id]
+        raise
 
 
 # ═══════════════════════════════════════════════════════════════════════
 # ChatGPT — Job-based polling
 # ═══════════════════════════════════════════════════════════════════════
-
-async def _submit_chatgpt_job(
-    client: httpx.AsyncClient,
-    scrape_url: str,
-    query: str,
-    api_key: Optional[str] = None,
-) -> str:
-    """Submit a ChatGPT scraping job and return the job_id."""
-    headers: Dict[str, str] = {}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    # The scrape_url might already be /api/scrape, depending on env Var. Ensure it is correct.
-    submit_url = scrape_url
-    if not submit_url.endswith("/api/scrape"):
-        submit_url = submit_url.rstrip("/") + "/api/scrape"
-
-    logger.info("[Scraper:chatgpt] Submitting job  url=%s  query=%r", submit_url, query)
-
-    response = await client.post(
-        submit_url,
-        json={"query": query},
-        headers=headers,
-    )
-    if response.status_code != 201:
-        raise ScrapingError(f"Failed to submit ChatGPT job: {response.status_code} - {response.text}")
-        
-    data = response.json()
-    job_id = data.get("job_id")
-    if not job_id:
-        raise ScrapingError(f"ChatGPT scraper did not return a job_id: {data}")
-
-    logger.info("[Scraper:chatgpt] Job submitted  job_id=%s", job_id)
-    return job_id
-
-
-async def _poll_chatgpt_result(
-    client: httpx.AsyncClient,
-    scrape_url: str,
-    job_id: str,
-    *,
-    api_key: Optional[str] = None,
-    poll_interval: float = 3.0,
-    max_interval: float = 3.0,
-    backoff_multiplier: float = 1.0,
-    max_attempts: int = 100,
-) -> Dict[str, Any]:
-    """Poll the ChatGPT result until completed."""
-    # Base URL parsing
-    if "/api/scrape" in scrape_url:
-        base_url = scrape_url.replace("/api/scrape", "/api/result")
-    else:
-        parsed = urlparse(scrape_url)
-        origin = f"{parsed.scheme}://{parsed.netloc}"
-        base_url = f"{origin}/api/result"
-        
-    poll_url = f"{base_url}/{job_id}"
-
-    headers: Dict[str, str] = {}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    attempt = 0
-    current_interval = poll_interval
-    while True:
-        attempt += 1
-        if attempt > max_attempts:
-            raise ScrapingTimeoutError(
-                f"Polling timed out after {max_attempts} attempts for ChatGPT job {job_id}"
-            )
-
-        logger.debug(
-            "[Scraper:chatgpt] poll attempt=%d/%d  interval=%.1fs  job_id=%s",
-            attempt, max_attempts, current_interval, job_id,
-        )
-
-        response = await client.get(poll_url, headers=headers)
-        response.raise_for_status()
-
-        data: Dict[str, Any] = response.json()
-        status = (data.get("status", "") or "").lower()
-
-        is_completed = status == "completed"
-        is_failed = status == "failed"
-        has_data = (
-            isinstance(data.get("data"), dict) and
-            data["data"].get("success") is not None
-        )
-        
-        if is_completed or is_failed or has_data:
-            if is_failed or (has_data and data["data"].get("success") is False):
-                error_msg = (
-                    data.get("error_message") or
-                    (data.get("data", {}).get("error_message") if isinstance(data.get("data"), dict) else None) or
-                    "Job failed to complete"
-                )
-                raise ScrapingError(f"ChatGPT job {job_id} failed: {error_msg}")
-
-            logger.info("[Scraper:chatgpt] Job completed  job_id=%s", job_id)
-
-            # --- Extract the actual content ---
-            # Priority: data["result"] → data["data"] → data itself (only if it
-            # carries a known content key, NOT just a job-metadata envelope).
-            content = data.get("result", data.get("data"))
-            if content is not None:
-                return content
-
-            # Last resort: use the top-level dict ONLY if it contains actual
-            # scrape content (answer_text, ai_overview_text, response, etc.).
-            # If it only has job-metadata keys we treat it as empty and let
-            # the content-validation in _fetch_chatgpt trigger a retry.
-            CONTENT_KEYS = {"answer_text", "ai_overview_text", "response", "text", "content"}
-            if any(k in data for k in CONTENT_KEYS):
-                return data
-
-            # No usable content — return a failure-shaped dict so retry fires
-            logger.warning(
-                "[Scraper:chatgpt] Job %s completed but response contains no content keys. "
-                "Raw keys: %s",
-                job_id, list(data.keys()),
-            )
-            return {"success": False, "error_message": "ChatGPT job completed but returned no content"}
-
-        # Still processing — wait then retry with exponential backoff
-        await asyncio.sleep(current_interval)
-        current_interval = min(current_interval * backoff_multiplier, max_interval)
-
 
 async def _fetch_chatgpt(
     client: httpx.AsyncClient,
@@ -613,29 +536,86 @@ async def _fetch_chatgpt(
     settings: Settings,
     api_key: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Submit → poll flow for ChatGPT scraper."""
-    job_id = await _submit_chatgpt_job(client, scrape_url, query, api_key)
-    result = await _poll_chatgpt_result(
-        client,
-        scrape_url,
-        job_id,
-        api_key=api_key,
-        poll_interval=settings.scraper_poll_initial_interval,
-        max_interval=settings.scraper_poll_max_interval,
-        backoff_multiplier=settings.scraper_poll_backoff_multiplier,
-        max_attempts=settings.scraper_poll_max_attempts,
+    """
+    ChatGPT scraper handler — Webhook/Callback flow.
+
+    The ChatGPT scraper is a job-queue system that delivers results via webhook:
+      1. We generate a unique job_id and register a Future in chatgpt_job_tracker.
+      2. We POST the job to the scraper with our callback_url.
+      3. We await the Future — which is resolved when the scraper POSTs
+         the result back to /api/v1/callbacks/chatgpt in main.py.
+    """
+    import uuid
+
+    headers: Dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    # Ensure the submit URL ends with /api/scrape
+    submit_url = scrape_url
+    if not submit_url.endswith("/api/scrape"):
+        submit_url = submit_url.rstrip("/") + "/api/scrape"
+
+    job_id = str(uuid.uuid4())
+    callback_url = f"{settings.callback_base_url}/api/v1/callbacks/chatgpt"
+
+    logger.info(
+        "[Scraper:chatgpt] Submitting job  url=%s  job_id=%s  callback_url=%s  query=%r",
+        submit_url, job_id, callback_url, query,
     )
 
-    # --- Content validation (mirrors Perplexity and Google patterns) ---
-    # If the result already signals failure, pass it through for retry.
+    # 1. Register the job in our local tracker before submitting
+    #    so there's no race condition if the callback arrives very fast.
+    result_future = chatgpt_job_tracker.register(job_id)
+
+    try:
+        # 2. Submit job to the scraper with our callback URL
+        response = await client.post(
+            submit_url,
+            json={
+                "job_id": job_id,
+                "query": query,
+                "callback_url": callback_url,
+            },
+            headers=headers,
+        )
+        # Accept 200, 201, or 202
+        if response.status_code not in [200, 201, 202]:
+            response.raise_for_status()
+
+        logger.info(
+            "[Scraper:chatgpt] Job queued. Waiting for webhook callback... job_id=%s",
+            job_id,
+        )
+
+        # 3. Wait for the scraper to POST the result to our callback endpoint
+        try:
+            result = await asyncio.wait_for(
+                result_future, timeout=settings.scraper_request_timeout
+            )
+        except asyncio.TimeoutError:
+            chatgpt_job_tracker.fail(job_id, "Timed out waiting for ChatGPT scraper callback")
+            raise ScrapingTimeoutError(
+                f"Timed out waiting for ChatGPT callback (job_id={job_id})"
+            )
+
+    except Exception:
+        # Clean up dangling future if submission itself fails
+        if job_id in chatgpt_job_tracker._jobs:
+            del chatgpt_job_tracker._jobs[job_id]
+        raise
+
+    # --- Content validation ---
     if result.get("success") is False:
         error_msg = result.get("error_message", "Unknown ChatGPT scraper error")
-        logger.warning("[Scraper:chatgpt] Server returned failure: %s", error_msg)
+        logger.warning("[Scraper:chatgpt] Callback payload returned failure: %s", error_msg)
         return result  # retry_if_result will inspect this
 
     # Try to find the main text content under several possible field names.
-    # The ChatGPT scraper may use different keys depending on its version.
-    CONTENT_FIELD_CANDIDATES = ["answer_text", "ai_overview_text", "response", "text", "content"]
+    CONTENT_FIELD_CANDIDATES = [
+        "answer_text", "ai_overview_text", "response", "text",
+        "content", "answer", "message",
+    ]
     ai_text = ""
     for field in CONTENT_FIELD_CANDIDATES:
         candidate = result.get(field, "")
@@ -645,11 +625,12 @@ async def _fetch_chatgpt(
 
     if not ai_text:
         logger.warning(
-            "[Scraper:chatgpt] Empty or missing content. Available keys: %s",
+            "[Scraper:chatgpt] Callback payload has no usable content. Available keys: %s",
             list(result.keys()),
         )
         return {**result, "success": False, "error_message": "Empty or insufficient ChatGPT response content"}
 
+    logger.info("[Scraper:chatgpt] Callback received with valid content  job_id=%s", job_id)
     return result
 
 
