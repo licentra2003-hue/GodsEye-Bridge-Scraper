@@ -42,9 +42,11 @@ from app.services.analysis_service import (
 
 settings = get_settings()
 
+import sys
 logging.basicConfig(
     level=logging.DEBUG if settings.app_debug else logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    stream=sys.stdout,
 )
 
 app = FastAPI(
@@ -298,7 +300,9 @@ async def chatgpt_callback(payload: Dict[str, Any]) -> Dict[str, bool]:
     logging.info("[ChatGPT Callback] Received result for job_id: %s", job_id)
 
     from app.services.scraping_service import chatgpt_job_tracker
-    chatgpt_job_tracker.complete(job_id, payload)
+    # Extract the 'result' object if provided, otherwise use full payload
+    data = payload.get("result", payload)
+    chatgpt_job_tracker.complete(job_id, data)
 
     return {"success": True}
 
@@ -319,7 +323,9 @@ async def new_ai_mode_callback(payload: Dict[str, Any]) -> Dict[str, bool]:
     logging.info("[New AI Callback] Received result for job_id: %s", job_id)
 
     from app.services.scraping_service import new_ai_job_tracker
-    new_ai_job_tracker.complete(job_id, payload)
+    # Extract the 'result' object if provided, otherwise use full payload
+    data = payload.get("result", payload)
+    new_ai_job_tracker.complete(job_id, data)
 
     return {"success": True}
 
