@@ -512,7 +512,7 @@ async def _fetch_new_ai_mode(
 
         # 3. Wait for the scraper to POST the result back
         try:
-            return await asyncio.wait_for(
+            result = await asyncio.wait_for(
                 result_future, timeout=settings.scraper_request_timeout
             )
         except asyncio.TimeoutError:
@@ -526,6 +526,34 @@ async def _fetch_new_ai_mode(
         if job_id in new_ai_job_tracker._jobs:
             del new_ai_job_tracker._jobs[job_id]
         raise
+
+    # --- Content validation ---
+    if result.get("success") is False:
+        error_msg = result.get("error_message", "Unknown New AI Mode scraper error")
+        logger.warning("[Scraper:new_ai_mode] Callback payload returned failure: %s", error_msg)
+        return result
+
+    # Try to find the main text content under several possible field names.
+    CONTENT_FIELD_CANDIDATES = [
+        "response_text", "answer_text", "ai_overview_text", "response", "text",
+        "content", "answer", "message",
+    ]
+    ai_text = ""
+    for field in CONTENT_FIELD_CANDIDATES:
+        candidate = result.get(field, "")
+        if isinstance(candidate, str) and len(candidate) > 1:
+            ai_text = candidate
+            break
+
+    if not ai_text:
+        logger.warning(
+            "[Scraper:new_ai_mode] Callback payload has no usable content. Available keys: %s",
+            list(result.keys()),
+        )
+        return {**result, "success": False, "error_message": "Empty or insufficient New AI Mode response content"}
+
+    logger.info("[Scraper:new_ai_mode] Callback received with valid content  job_id=%s", job_id)
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -612,7 +640,7 @@ async def _fetch_chatgpt(
 
     # Try to find the main text content under several possible field names.
     CONTENT_FIELD_CANDIDATES = [
-        "answer_text", "ai_overview_text", "response", "text",
+        "response_text", "answer_text", "ai_overview_text", "response", "text",
         "content", "answer", "message",
     ]
     ai_text = ""
